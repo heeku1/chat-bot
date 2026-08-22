@@ -1,0 +1,11 @@
+node_modules/
+.venv/
+.env
+.env.*
+dist/
+build/
+.vite/
+.next/
+.DS_Store
+npm-debug.log*
+runtime-data/

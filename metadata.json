@@ -1,0 +1,6 @@
+{
+  "name": "Jimmy_bot",
+  "description": "เครื่องมือสร้างและออกแบบบอท Telegram ยกระดับด้วยระบบ AI อัจฉริยะ, ระบบ Sandbox วิเคราะห์โครงสร้างคำสั่ง (Command Parser) และเครื่องจำลองเสมือนจริงในสไตล์เรียบหรู",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
