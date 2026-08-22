@@ -2,6 +2,7 @@ node_modules/
 .venv/
 .env
 .env.*
+!.env.example
 dist/
 build/
 .vite/
