@@ -28,6 +28,8 @@ dotenv.config({ path: ".env.local", override: true });
 
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
+// เวอร์ชัน build — ใช้ยืนยันผ่าน /health ว่า deploy บน Render เป็นโค้ดล่าสุดหรือยัง
+const APP_VERSION = "phase2-menu-1";
 const BOT_TOKEN = (process.env.BOT_TOKEN || process.env.TELEGRAM_BOT_TOKEN || "").trim();
 const WEBHOOK_BASE_URL = (process.env.WEBHOOK_BASE_URL || process.env.RENDER_EXTERNAL_URL || "").replace(/\/$/, "");
 const TELEGRAM_WEBHOOK_SECRET = (process.env.TELEGRAM_WEBHOOK_SECRET || "").trim();
@@ -1260,7 +1262,10 @@ app.get("/health", (_req, res) => {
     port: PORT,
     webhookPath: "/telegram/webhook",
     hasBotToken: Boolean(token),
-    hasWebhookSecret: Boolean(TELEGRAM_WEBHOOK_SECRET)
+    hasWebhookSecret: Boolean(TELEGRAM_WEBHOOK_SECRET),
+    // ใช้ยืนยันว่า deploy บน Render เป็น commit ล่าสุดหรือยัง (Render inject ให้อัตโนมัติ)
+    version: APP_VERSION,
+    gitCommit: process.env.RENDER_GIT_COMMIT || null
   });
 });
 
