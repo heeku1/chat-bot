@@ -50,6 +50,11 @@ export class TelegramUpdateHandler {
       const startAction = this.botConfig ? resolveConfigAction(this.botConfig, { kind: "command", value: command }) : null;
       await client.sendMessage(chatId, startAction?.reply || "🤖 สวัสดีครับ ผมคือ Jimmy AI Assistant", buttonPayload?.replyMarkup);
       if (buttonPayload?.inlineMarkup) await client.sendMessage(chatId, "เมนูใต้ข้อความ:", buttonPayload.inlineMarkup);
+      await this.sendCapabilityMenu(client, chatId);
+      return;
+    }
+    if (command === "/menu") {
+      await this.sendCapabilityMenu(client, chatId);
       return;
     }
     if (buttonModel && command.startsWith("/")) {
@@ -60,7 +65,7 @@ export class TelegramUpdateHandler {
       }
     }
     if (command === "/help") {
-      await client.sendMessage(chatId, "คำสั่ง Jimmy\n/start เริ่มต้น\n/status ดูสถานะ\n/memory ดูสิ่งที่จำ\n/remember <ข้อความ> บันทึกข้อมูล\n/forget ล้าง long-term memory (ต้องยืนยัน)");
+      await client.sendMessage(chatId, "คำสั่ง Jimmy\n/start เริ่มต้น\n/menu เมนู 9 ความสามารถ\n/status ดูสถานะ\n/memory ดูสิ่งที่จำ\n/remember <ข้อความ> บันทึกข้อมูล\n/forget ล้าง long-term memory (ต้องยืนยัน)\n\nพิมพ์ภาษาไทยธรรมดาก็สั่งได้ เช่น \"สร้างภาพโปรโมตให้หน่อย\"");
       return;
     }
     if (command === "/status") {
@@ -161,6 +166,11 @@ export class TelegramUpdateHandler {
       return;
     }
 
+    if (data.startsWith("cap:")) {
+      await this.handleCapabilityCallback(client, callback, data.slice(4));
+      return;
+    }
+
     if (this.botConfig && data.startsWith("jimmy:")) {
       const resolution = resolveButtonAction(compileButtonModel(this.botConfig), { kind: "callback", value: data });
       if (!resolution.matched || !resolution.reply) {
@@ -230,6 +240,68 @@ export class TelegramUpdateHandler {
     }
 
     await client.answerCallbackQuery(callback.id, "ไม่รองรับ callback นี้");
+  }
+
+  /** เมนู 9 ความสามารถตาม docs/vision-jimmy-brain.md */
+  private async sendCapabilityMenu(client: TelegramClient, chatId: string) {
+    await client.sendMessage(chatId, "🎛️ เมนูความสามารถของ Jimmy\nเลือกได้เลย หรือพิมพ์ภาษาไทยธรรมดาก็สั่งได้", inlineKeyboard([
+      [
+        { text: "💬 คุยกับ AI", callback_data: "cap:chat" },
+        { text: "🎨 สร้างภาพ", callback_data: "cap:image" },
+      ],
+      [
+        { text: "✍️ เขียนคอนเทนต์", callback_data: "cap:content" },
+        { text: "💻 ช่วยเขียนโค้ด", callback_data: "cap:code" },
+      ],
+      [
+        { text: "📢 สร้างโพสต์", callback_data: "cap:post" },
+        { text: "📊 สรุปข้อมูล", callback_data: "cap:summarize" },
+      ],
+      [
+        { text: "👥 เช็กสมาชิก", callback_data: "cap:members" },
+        { text: "🎁 เช็กกิจกรรม", callback_data: "cap:activity" },
+      ],
+      [{ text: "⚙️ เปิดหลังบ้าน", callback_data: "cap:admin" }],
+    ]));
+  }
+
+  private async handleCapabilityCallback(client: TelegramClient, callback: TelegramCallbackQuery, capabilityId: string) {
+    const chatId = String(callback.message?.chat.id || "");
+    const userId = String(callback.from.id);
+    if (!chatId) {
+      await client.answerCallbackQuery(callback.id, "Callback ไม่ถูกต้อง");
+      return;
+    }
+
+    const prompts: Record<string, string> = {
+      chat: "💬 พิมพ์คำถามหรือหัวข้อที่อยากคุยได้เลยครับ",
+      image: "🎨 บอกรายละเอียดภาพที่ต้องการได้เลยครับ\nเช่น \"สร้างภาพโปรโมตกาแฟ สไตล์มินิมอล\"",
+      content: "✍️ บอกหัวข้อ/โจทย์คอนเทนต์ได้เลยครับ\nเช่น \"เขียนคอนเทนต์แนะนำร้านกาแฟใหม่\"",
+      code: "💻 ส่งโค้ดหรือ error message มาได้เลยครับ ผมช่วยหาสาเหตุให้",
+      post: "📢 บอกหัวข้อโพสต์ที่ต้องการได้เลยครับ เช่น \"สร้างโพสต์โปรโมชั่นสงกรานต์\"",
+      summarize: "📊 ส่งข้อความ/ข้อมูลที่ต้องการสรุปมาได้เลยครับ",
+      members: "👥 ผมจะสรุปข้อมูลสมาชิกให้ครับ\n(ฟีเจอร์นี้ต้องเชื่อมฐานข้อมูลสมาชิกก่อน — Safe Preview Mode)",
+      activity: "🎁 ผมจะสรุปข้อมูลกิจกรรมให้ครับ\n(ฟีเจอร์นี้ต้องเชื่อมฐานข้อมูลกิจกรรมก่อน — Safe Preview Mode)",
+    };
+
+    if (capabilityId === "admin") {
+      if (!this.dependencies.adminUserIds.has(userId)) {
+        await client.answerCallbackQuery(callback.id, "🔒 เฉพาะ Telegram Admin เท่านั้น");
+        return;
+      }
+      await client.answerCallbackQuery(callback.id, "สำเร็จ");
+      const status = this.dependencies.getRuntimeSummary();
+      await client.sendMessage(chatId, `⚙️ หลังบ้าน (Admin)\n\nTelegram: ${status.running ? "Online" : "Stopped"}\nAI Provider: ${status.provider}\nReviewer: ${capitalize(status.reviewerMode)}\nPending Approvals: ${this.dependencies.approvals.countPending(chatId)}\n\nจัดการเพิ่มเติมได้ที่เว็บแอดมินของโปรเจกต์`);
+      return;
+    }
+
+    const prompt = prompts[capabilityId];
+    if (!prompt) {
+      await client.answerCallbackQuery(callback.id, "ไม่รองรับความสามารถนี้");
+      return;
+    }
+    await client.answerCallbackQuery(callback.id, "สำเร็จ");
+    await client.sendMessage(chatId, prompt);
   }
 
   private async remember(client: TelegramClient, chatId: string, note: string) {

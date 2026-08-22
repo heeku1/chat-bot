@@ -4,6 +4,7 @@ import { AiProviderName, RuntimeAiConfig } from "./types";
 
 interface GenerateInput {
   text: string;
+  intent?: string;
   recent: Array<{ role: "user" | "assistant"; content: string }>;
   notes: Array<{ content: string }>;
 }
@@ -42,8 +43,32 @@ export async function generateProviderReply(input: GenerateInput, config: Runtim
 
   return {
     provider: "offline",
-    reply: "🤖 Jimmy Offline Mode\n\nรับคำสั่งแล้วครับ\nตอนนี้ยังไม่ได้เชื่อม AI Provider\nแต่ Telegram runtime และ command framework ยังทำงานอยู่",
+    reply: buildOfflineReply(input.intent),
   };
+}
+
+/** Offline mode: ตอบตาม intent เพื่อให้ผู้ใช้รู้ว่าคำสั่งถูกเข้าใจแล้ว (Safe Preview) */
+function buildOfflineReply(intent?: string): string {
+  const header = "🤖 Jimmy Offline Mode\n\n";
+  const footer = "\n\n(ยังไม่ได้เชื่อม AI Provider — ใส่ GEMINI_API_KEY หรือ OPENAI_API_KEY เพื่อเปิดโหมดเต็ม)";
+  switch (intent) {
+    case "generate_image":
+      return `${header}รับโจทย์สร้างภาพแล้วครับ 🎨\nตอนนี้ยังไม่ได้เชื่อม AI Provider จึงยังไม่สร้างภาพจริงได้${footer}`;
+    case "draft_content":
+      return `${header}รับโจทย์เขียนคอนเทนต์/โพสต์แล้วครับ ✍️\nตอนนี้ยังไม่ได้เชื่อม AI Provider จึงยังร่างข้อความจริงไม่ได้${footer}`;
+    case "explain_code":
+      return `${header}รับโจทย์ช่วยดูโค้ดแล้วครับ 💻\nตอนนี้ยังไม่ได้เชื่อม AI Provider จึงวิเคราะห์ลึกไม่ได้${footer}`;
+    case "summarize":
+      return `${header}รับโจทย์สรุปข้อมูลแล้วครับ 📊\nตอนนี้ยังไม่ได้เชื่อม AI Provider จึงสรุปเนื้อหาจริงไม่ได้${footer}`;
+    case "translate":
+      return `${header}รับโจทย์แปลภาษาแล้วครับ\nตอนนี้ยังไม่ได้เชื่อม AI Provider จึงแปลจริงไม่ได้${footer}`;
+    case "member_check":
+      return `${header}รับคำสั่งเช็กสมาชิกแล้วครับ 👥\nฟีเจอร์นี้ต้องเชื่อมฐานข้อมูลสมาชิกก่อน (Safe Preview Mode)${footer}`;
+    case "activity_check":
+      return `${header}รับคำสั่งเช็กกิจกรรมแล้วครับ 🎁\nฟีเจอร์นี้ต้องเชื่อมฐานข้อมูลกิจกรรมก่อน (Safe Preview Mode)${footer}`;
+    default:
+      return `${header}รับคำสั่งแล้วครับ\nTelegram runtime และ command framework ยังทำงานอยู่${footer}`;
+  }
 }
 
 function buildSystemPrompt(config: RuntimeAiConfig, notes: Array<{ content: string }>) {

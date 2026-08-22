@@ -36,7 +36,7 @@ export class JimmyBrain {
 
     const recent = this.memory.getRecent(input.chatId);
     const notes = this.memory.getNotes(input.chatId);
-    const generated = await generateProviderReply({ text: input.text, recent, notes }, config);
+    const generated = await generateProviderReply({ text: input.text, intent: classification.intent, recent, notes }, config);
     const recommendation = this.reviewer.review(input, generated.reply, classification.intent, classification.risk, config.reviewerMode);
     this.memory.addMessage(input.chatId, "user", input.text);
     this.memory.addMessage(input.chatId, "assistant", generated.reply);

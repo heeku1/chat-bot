@@ -42,6 +42,8 @@ export const SAFE_TOOLS: JimmyTool[] = [
   { name: "summarize_text", description: "Summarize user-provided text", risk: "low", requiresApproval: false },
   { name: "generate_image", description: "Generate an image asset (no system impact)", risk: "low", requiresApproval: false },
   { name: "translate_text", description: "Translate user-provided text", risk: "low", requiresApproval: false },
+  { name: "check_members", description: "อ่านและสรุปข้อมูลสมาชิก (read-only)", risk: "low", requiresApproval: false },
+  { name: "check_activity", description: "อ่านและสรุปข้อมูลกิจกรรม (read-only)", risk: "low", requiresApproval: false },
 ];
 
 /**
