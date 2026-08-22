@@ -291,6 +291,37 @@ function getRuntimeBotToken(instanceId: unknown = DEFAULT_INSTANCE_ID): string {
   return botRegistry.resolveToken(id) || (id === DEFAULT_INSTANCE_ID ? BOT_TOKEN : "");
 }
 
+/** Remove keyboard entries whose labels duplicate botButtons.replyKeyboard labels (publish preflight requirement). */
+function dedupeKeyboardLabels(config: BotConfig): BotConfig {
+  const replyLabels = new Set(
+    (config.botButtons?.replyKeyboard || [])
+      .map((button) => safeString(button.text).trim())
+      .filter(Boolean)
+  );
+  if (!replyLabels.size) return config;
+  return {
+    ...config,
+    botSettings: {
+      ...config.botSettings,
+      keyboards: config.botSettings.keyboards.filter((entry) => !replyLabels.has(safeString(entry.text).trim()))
+    }
+  };
+}
+
+/**
+ * Self-healing for ephemeral hosts (e.g. Render free tier): if BOT_TOKEN is configured but the
+ * registry is empty (state file lost on restart/redeploy), re-register the default instance so
+ * autoSetWebhookOnBoot can point Telegram at the CURRENT public URL on every boot.
+ */
+function ensureDefaultBotRegistered() {
+  if (!BOT_TOKEN || botRegistry.resolve(DEFAULT_INSTANCE_ID)) return;
+  const config = normalizeConfig(dedupeKeyboardLabels({ ...getDraftBotConfig(DEFAULT_INSTANCE_ID), instanceId: DEFAULT_INSTANCE_ID }));
+  botRegistry.commitPublished(DEFAULT_INSTANCE_ID, BOT_TOKEN, config, new Date().toISOString());
+  draftBotConfigs.set(DEFAULT_INSTANCE_ID, config);
+  hasPublishedConfig = true;
+  console.log("♻️ Auto-registered default bot from BOT_TOKEN (registry was empty)");
+}
+
 const conversationMemory = new ConversationMemory();
 const approvalStore = new ApprovalStore();
 const jimmyReviewer = new JimmyReviewer();
@@ -1840,6 +1871,10 @@ async function autoSetWebhookOnBoot() {
   for (const entry of botRegistry.entries()) {
     const token = getRuntimeBotToken(entry.instanceId);
     if (!token) continue;
+    if (!WEBHOOK_BASE_URL) {
+      console.log(`ℹ️ WEBHOOK_BASE_URL not set — skip auto webhook for ${entry.instanceId}`);
+      continue;
+    }
     try {
     const payload: Record<string, any> = {
       url: `${WEBHOOK_BASE_URL}/telegram/webhook/${entry.instanceId}`,
@@ -1855,6 +1890,7 @@ async function autoSetWebhookOnBoot() {
 }
 
 const startServer = async () => {
+  ensureDefaultBotRegistered();
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({ server: { middlewareMode: true }, appType: "spa" });
     app.use(vite.middlewares);
