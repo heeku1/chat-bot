@@ -16,6 +16,11 @@ services:
       # --- Required secrets (fill in Render Dashboard after first deploy) ---
       - key: BOT_TOKEN
         sync: false
+      # --- Production dashboard login ---
+      - key: JIMMY_ADMIN_USERNAME
+        sync: false
+      - key: JIMMY_ADMIN_PASSWORD
+        sync: false
       - key: TELEGRAM_ADMIN_USER_IDS
         sync: false
       # --- AI provider: fill at least one ---

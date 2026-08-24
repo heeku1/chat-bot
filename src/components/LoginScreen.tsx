@@ -14,8 +14,10 @@ export default function LoginScreen({ theme, toggleTheme, users, onLoginSuccess 
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [showDoc, setShowDoc] = useState(true);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const showDemoCredentials = false;
 
-  const handleLoginSubmit = (e: FormEvent) => {
+  const handleLoginSubmit = async (e: FormEvent) => {
     e.preventDefault();
     setError(null);
 
@@ -24,24 +26,32 @@ export default function LoginScreen({ theme, toggleTheme, users, onLoginSuccess 
       return;
     }
 
-    const foundUser = users.find(u => u.username.toLowerCase() === username.trim().toLowerCase());
-
-    if (!foundUser) {
-      setError("❌ ไม่พบบัญชีผู้ใช้งานนี้ในระบบจำลอง");
-      return;
+    setIsSubmitting(true);
+    try {
+      const response = await fetch("/api/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ username: username.trim(), password }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data?.user) {
+        setError(data?.error || "❌ เข้าสู่ระบบไม่สำเร็จ");
+        return;
+      }
+      onLoginSuccess({
+        username: data.user.username,
+        name: data.user.name,
+        role: data.user.role,
+        isActive: true,
+        botLimit: data.user.role === "admin" ? 10 : 1,
+        createdAt: new Date().toISOString(),
+      });
+    } catch {
+      setError("❌ ไม่สามารถเชื่อมต่อเซิร์ฟเวอร์ได้");
+    } finally {
+      setIsSubmitting(false);
     }
-
-    if (foundUser.password !== password) {
-      setError("❌ รหัสผ่านไม่ถูกต้อง กรุณาลองใหม่อีกครั้ง");
-      return;
-    }
-
-    if (!foundUser.isActive) {
-      setError("🔒 บัญชีผู้ใช้นี้ถูกระงับการใช้งานชั่วคราว (Disabled) กรุณาติดต่อผู้ดูแลระบบ (Master Admin)");
-      return;
-    }
-
-    onLoginSuccess(foundUser);
   };
 
   const handleQuickLogin = (user: UserAccount) => {
@@ -165,8 +175,8 @@ export default function LoginScreen({ theme, toggleTheme, users, onLoginSuccess 
             </div>
           </div>
 
-          {/* Quick Demo Credentials */}
-          <div className={`border rounded-2xl p-5 sm:p-6 shadow-sm ${
+          {/* Quick Demo Credentials: development-only escape hatch */}
+          {showDemoCredentials && <div className={`border rounded-2xl p-5 sm:p-6 shadow-sm ${
             theme === "light" ? "bg-white border-slate-200" : "bg-[#111114] border-white/5"
           }`}>
             <h3 className="text-xs font-extrabold uppercase text-gray-400 tracking-wider mb-3 flex items-center gap-1.5">
@@ -212,7 +222,7 @@ export default function LoginScreen({ theme, toggleTheme, users, onLoginSuccess 
                 </button>
               ))}
             </div>
-          </div>
+          </div>}
         </div>
 
         {/* Right Side: Secure Login Form */}
@@ -279,16 +289,17 @@ export default function LoginScreen({ theme, toggleTheme, users, onLoginSuccess 
 
               <button
                 type="submit"
+                disabled={isSubmitting}
                 className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs py-3 rounded-xl transition-all cursor-pointer shadow-lg shadow-indigo-600/20 active:scale-[0.98]"
               >
-                เข้าสู่ระบบสมาชิก
+                <Lock className="w-4 h-4 inline-block mr-2" />
+                {isSubmitting ? "กำลังตรวจสอบ..." : "เข้าสู่ระบบ"}
               </button>
             </form>
 
             <div className="mt-6 border-t border-white/5 pt-4 text-center">
-              <p className="text-[10px] text-gray-500 leading-relaxed">
-                🔒 พัฒนาภายใต้ระเบียบรักษาความปลอดภัย Jimmy_bot <br />
-                ข้อมูลทั้งหมดจำลองอยู่บนสภาพแวดล้อม Local Storage ของบราวเซอร์นี้เท่านั้น
+              <p className="text-[10px] text-gray-500">
+                การเข้าสู่ระบบจะใช้ session ที่ปลอดภัยบนเซิร์ฟเวอร์
               </p>
             </div>
           </div>

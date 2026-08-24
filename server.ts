@@ -15,6 +15,7 @@ import { ToolExecutor } from "./server/ai/executor";
 import { TelegramUpdateHandler } from "./server/telegram/handlers";
 import { TelegramClient } from "./server/telegram/client";
 import { TelegramPollingRuntime } from "./server/telegram/polling";
+import { authenticate, clearSessionCookie, createApiGuard, createSession, getPrincipal, isAuthConfigured, revokeSession, sessionCookie } from "./server/auth/session";
 import { BotConfigRegistry, publishAtomically } from "./server/botRegistry";
 import {
   ButtonAction,
@@ -49,6 +50,32 @@ const TELEGRAM_ADMIN_USER_IDS = new Set(
 );
 
 app.use(express.json({ limit: "10mb" }));
+
+app.post("/api/auth/login", (req, res) => {
+  const username = safeString(req.body?.username).trim();
+  const password = safeString(req.body?.password);
+  const principal = authenticate(username, password);
+  if (!principal) return res.status(401).json({ ok: false, error: "ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง" });
+  const secure = req.secure || req.header("x-forwarded-proto") === "https";
+  res.setHeader("Set-Cookie", sessionCookie(createSession(principal), secure));
+  return res.json({ ok: true, user: principal });
+});
+
+app.get("/api/auth/me", (req, res) => {
+  const principal = getPrincipal(req);
+  return principal ? res.json({ ok: true, user: principal }) : res.status(401).json({ ok: false, error: "Authentication required" });
+});
+
+app.post("/api/auth/logout", (req, res) => {
+  revokeSession(req);
+  const secure = req.secure || req.header("x-forwarded-proto") === "https";
+  res.setHeader("Set-Cookie", clearSessionCookie(secure));
+  return res.json({ ok: true });
+});
+
+// Migration mode: ถ้ายังไม่ตั้ง JIMMY_ADMIN_USERNAME/PASSWORD ระบบยังเปิด API แบบเดิม
+// พอตั้งค่าแล้ว ทุก /api/* (ยกเว้น auth) ต้องมี session cookie จึงจะเรียกได้
+app.use("/api", createApiGuard({ enabled: isAuthConfigured() }));
 
 type BotConfig = {
   instanceId?: string;
@@ -1276,6 +1303,7 @@ app.get("/health", (_req, res) => {
     webhookPath: "/telegram/webhook",
     hasBotToken: Boolean(token),
     hasWebhookSecret: Boolean(TELEGRAM_WEBHOOK_SECRET),
+    authEnabled: isAuthConfigured(),
     // ใช้ยืนยันว่า deploy บน Render เป็น commit ล่าสุดหรือยัง (Render inject ให้อัตโนมัติ)
     version: APP_VERSION,
     gitCommit: process.env.RENDER_GIT_COMMIT || null

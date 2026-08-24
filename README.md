@@ -35,6 +35,7 @@ npm run dev                  # http://localhost:3000
    - Render จะอ่าน `render.yaml` และตั้งค่าให้อัตโนมัติ
 3. หลัง deploy เสร็จ ไปที่ **Environment** แล้วกรอก:
    - `BOT_TOKEN` — จาก [@BotFather](https://t.me/BotFather)
+   - `JIMMY_ADMIN_USERNAME` และ `JIMMY_ADMIN_PASSWORD` — บัญชีเข้า Dashboard production (ห้ามใช้รหัส demo เดิม)
    - `TELEGRAM_ADMIN_USER_IDS` — user ID ผู้ดูแล (คั่นด้วย comma)
    - `GEMINI_API_KEY` หรือ `OPENAI_API_KEY`
    - `WEBHOOK_BASE_URL` — ใส่ URL ของ service เช่น `https://jimmy-chat-bot.onrender.com`
@@ -43,6 +44,10 @@ npm run dev                  # http://localhost:3000
 4. Save → Render จะ redeploy ให้เอง แล้วบอทจะรับ webhook อัตโนมัติ
 
 **ตรวจสอบสถานะ:** เปิด `/health` — ต้องได้ `"ok":true`
+
+หน้า Dashboard ใช้ server session แบบ HttpOnly cookie แล้ว บัญชี login ต้องตั้งผ่าน Render Environment; ค่าใน browser/localStorage ไม่ใช่สิทธิ์ยืนยันตัวตน
+
+**โหมดเปิดใช้งาน:** ตราบใดที่ยังไม่ตั้ง `JIMMY_ADMIN_USERNAME`/`JIMMY_ADMIN_PASSWORD` ระบบจะอยู่ใน migration mode (API เปิดเหมือนเดิม) — ตรวจสถานะได้ที่ `/health` → `authEnabled`; พอตั้งค่าทั้งสองตัวแล้ว ทุก `/api/*` จะต้องมี session จึงเรียกได้
 
 ### ข้อจำกัด Free plan
 - Disk เป็นแบบ ephemeral — config/state รีเซ็ตเมื่อ redeploy (ใช้ paid plan + persistent disk หากต้องการเก็บถาวร)

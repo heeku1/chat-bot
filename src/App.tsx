@@ -250,15 +250,26 @@ export default function App() {
     return defaultUsers;
   });
 
-  const [currentUser, setCurrentUser] = useState<UserAccount | null>(() => {
-    try {
-      const saved = localStorage.getItem("jimmy_bot_logged_in_user");
-      if (saved) {
-        return JSON.parse(saved);
-      }
-    } catch (e) {}
-    return null;
-  });
+  const [currentUser, setCurrentUser] = useState<UserAccount | null>(null);
+  const [serverAuthenticated, setServerAuthenticated] = useState(false);
+
+  useEffect(() => {
+    fetch("/api/auth/me", { credentials: "include" })
+      .then(async (response) => response.ok ? response.json() : null)
+      .then((data) => {
+        if (!data?.user) return;
+        setCurrentUser({
+          username: data.user.username,
+          name: data.user.name,
+          role: data.user.role,
+          isActive: true,
+          botLimit: data.user.role === "admin" ? 10 : 1,
+          createdAt: new Date().toISOString(),
+        });
+        setServerAuthenticated(true);
+      })
+      .catch(() => undefined);
+  }, []);
 
   const [showUsersConsole, setShowUsersConsole] = useState<boolean>(false);
 
@@ -301,7 +312,7 @@ export default function App() {
 
   // Dynamically check if active user gets disabled or deleted
   useEffect(() => {
-    if (!currentUser) return;
+    if (!currentUser || serverAuthenticated) return;
     const freshUser = users.find(u => u.username === currentUser.username);
     if (!freshUser) {
       handleLogout();
@@ -318,10 +329,12 @@ export default function App() {
       setCurrentUser(freshUser);
       localStorage.setItem("jimmy_bot_logged_in_user", JSON.stringify(freshUser));
     }
-  }, [users, currentUser]);
+  }, [users, currentUser, serverAuthenticated]);
 
   const handleLogout = () => {
+    void fetch("/api/auth/logout", { method: "POST", credentials: "include" });
     setCurrentUser(null);
+    setServerAuthenticated(false);
     setShowUsersConsole(false);
     localStorage.removeItem("jimmy_bot_logged_in_user");
   };
@@ -333,6 +346,7 @@ export default function App() {
 
   const handleLoginSuccess = (user: UserAccount) => {
     setCurrentUser(user);
+    setServerAuthenticated(true);
     localStorage.setItem("jimmy_bot_logged_in_user", JSON.stringify(user));
   };
 
