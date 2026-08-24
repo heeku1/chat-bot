@@ -336,10 +336,13 @@ export class TelegramUpdateHandler {
       await client.answerCallbackQuery(callback.id, "🔒 เฉพาะ Telegram Admin เท่านั้น");
       return;
     }
+    // Deep-link ปุ่มเปิดหลังบ้าน: ส่งเฉพาะเมื่อเป็น public HTTPS URL (localhost ไม่ควรโชว์ปุ่ม)
+    const adminUrl = this.dependencies.getAdminUrl();
     const resolved = resolveCapability(capabilityId, {
       isAdmin,
       runtimeSummary: this.dependencies.getRuntimeSummary(),
       pendingApprovals: this.dependencies.approvals.countPending(chatId),
+      adminUrl: adminUrl.startsWith("https://") ? adminUrl : undefined,
     });
     if (!resolved) {
       await client.answerCallbackQuery(callback.id, "ไม่รองรับความสามารถนี้");
