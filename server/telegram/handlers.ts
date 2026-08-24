@@ -11,6 +11,7 @@ import { inlineKeyboard, TelegramCallbackQuery, TelegramClient, TelegramMessage,
 import { buildCapabilityMenu, CAPABILITY_MENU_TEXT, resolveCapability } from "./capabilities";
 import { BotConfig } from "../../src/types";
 import { buildTelegramButtonPayload, compileButtonModel, resolveButtonAction, resolveConfigAction } from "../../src/utils/buttonActions";
+import { OutboundBlockedError, readBodyWithLimit, safeFetch } from "../security/outbound";
 
 interface HandlerDependencies {
   memory: ConversationMemory;
@@ -355,23 +356,24 @@ export class TelegramUpdateHandler {
     const url = (intent === "member_check" ? sources.membersApiUrl : sources.activityApiUrl)?.trim();
     if (!url || !/^https:\/\//i.test(url)) return null;
     const label = intent === "member_check" ? "สมาชิก" : "กิจกรรม";
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 8000);
     try {
       const headers: Record<string, string> = { Accept: "application/json" };
       if (sources.apiToken?.trim()) headers.Authorization = `Bearer ${sources.apiToken.trim()}`;
-      const response = await fetch(url, { headers, signal: controller.signal });
+      const response = await safeFetch(url, { headers, timeoutMs: 8000, maxBytes: 256 * 1024 });
       if (!response.ok) {
         return `⚠️ API${label}ตอบ HTTP ${response.status} — ตรวจ URL/Token อีกครั้งครับ`;
       }
-      const data = await response.json().catch(() => null);
-      if (data === null) return `⚠️ API${label}ไม่ได้ส่ง JSON กลับมาครับ`;
+      const body = await readBodyWithLimit(response, 256 * 1024);
+      const data = JSON.parse(body) as unknown;
       return formatDataSourceSummary(label, data);
     } catch (err: any) {
+      if (err instanceof OutboundBlockedError) {
+        console.warn(`[data-source] blocked ${label}:`, err.message);
+        return `⚠️ ปฏิเสธการเรียก API${label} (${err.message})\nอนุญาตเฉพาะ HTTPS สาธารณะเท่านั้นครับ`;
+      }
+      if (err instanceof SyntaxError) return `⚠️ API${label}ไม่ได้ส่ง JSON กลับมาครับ`;
       console.error("[data-source] fetch failed:", err?.message || err);
       return `⚠️ เชื่อมต่อ API${label}ไม่สำเร็จ (${String(err?.name || err).slice(0, 60)})`;
-    } finally {
-      clearTimeout(timeout);
     }
   }
 

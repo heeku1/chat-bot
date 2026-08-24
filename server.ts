@@ -16,6 +16,7 @@ import { TelegramUpdateHandler } from "./server/telegram/handlers";
 import { TelegramClient } from "./server/telegram/client";
 import { TelegramPollingRuntime } from "./server/telegram/polling";
 import { authenticate, clearSessionCookie, createApiGuard, createSession, getPrincipal, isAuthConfigured, revokeSession, sessionCookie } from "./server/auth/session";
+import { assertSafePublicUrl, OutboundBlockedError, createRateLimiter, safeFetch, timingSafeTokenEqual } from "./server/security/outbound";
 import { BotConfigRegistry, publishAtomically } from "./server/botRegistry";
 import {
   ButtonAction,
@@ -51,7 +52,22 @@ const TELEGRAM_ADMIN_USER_IDS = new Set(
 
 app.use(express.json({ limit: "10mb" }));
 
+// Basic security headers สำหรับทุก response
+app.use((_req, res, next) => {
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("X-Frame-Options", "DENY");
+  res.setHeader("Referrer-Policy", "no-referrer");
+  next();
+});
+
+// Brute-force guard สำหรับ login: 10 ครั้ง / 15 นาที ต่อ IP
+const loginRateLimiter = createRateLimiter({ windowMs: 15 * 60 * 1000, max: 10 });
+
 app.post("/api/auth/login", (req, res) => {
+  const clientKey = req.ip || req.header("x-forwarded-for") || "unknown";
+  if (!loginRateLimiter.allow(clientKey)) {
+    return res.status(429).json({ ok: false, error: "พยายามเข้าสู่ระบบบ่อยเกินไป ลองอีกครั้งใน 15 นาที" });
+  }
   const username = safeString(req.body?.username).trim();
   const password = safeString(req.body?.password);
   const principal = authenticate(username, password);
@@ -1794,9 +1810,10 @@ app.post("/api/webhook-health", async (req, res) => {
   if (!webhookUrl) return res.status(400).json({ error: "โปรดระบุ Webhook URL ที่ต้องการทดสอบ" });
 
   try {
-    new URL(webhookUrl);
-  } catch {
-    return res.json({ ok: false, status: 0, statusText: "Invalid URL", latencyMs: 0, error: "รูปแบบ URL ไม่ถูกต้อง", suggestion: "URL ต้องขึ้นต้นด้วย https://" });
+    await assertSafePublicUrl(webhookUrl);
+  } catch (err: any) {
+    const reason = err instanceof OutboundBlockedError ? err.message : "Invalid URL";
+    return res.json({ ok: false, status: 0, statusText: "Blocked", latencyMs: 0, error: reason, suggestion: "ใช้เฉพาะ URL HTTPS สาธารณะเท่านั้น" });
   }
 
   const headers: Record<string, string> = { "Content-Type": "application/json", "User-Agent": "TelegramBotWebhookProbe/1.0" };
@@ -1806,21 +1823,19 @@ app.post("/api/webhook-health", async (req, res) => {
   }
 
   const startedAt = Date.now();
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 6000);
 
   try {
-    const response = await fetch(webhookUrl, {
+    const response = await safeFetch(webhookUrl, {
       method: "POST",
       headers,
       body: JSON.stringify({ update_id: 12345678, message: { message_id: 999, chat: { id: 7777777, type: "private" }, date: Math.floor(Date.now() / 1000), text: "/start" } }),
-      signal: controller.signal
+      timeoutMs: 6000,
+      maxBytes: 256 * 1024,
     });
-    clearTimeout(timeout);
     res.json({ ok: response.ok, status: response.status, statusText: response.statusText, latencyMs: Date.now() - startedAt, error: response.ok ? null : `HTTP ${response.status}`, suggestion: response.ok ? "Webhook ตอบรับได้แล้ว" : "ตรวจสอบ path และ log ฝั่ง server" });
   } catch (err: any) {
-    clearTimeout(timeout);
-    res.json({ ok: false, status: 0, statusText: err.name || "Network Error", latencyMs: Date.now() - startedAt, error: err.message || "เชื่อมต่อไม่สำเร็จ", suggestion: "ตรวจสอบว่า server online และ URL ถูกต้อง" });
+    const reason = err instanceof OutboundBlockedError ? err.message : err.message || "เชื่อมต่อไม่สำเร็จ";
+    res.json({ ok: false, status: 0, statusText: err.name || "Network Error", latencyMs: Date.now() - startedAt, error: reason, suggestion: "ตรวจสอบว่า server online และ URL ถูกต้อง" });
   }
 });
 
@@ -1869,7 +1884,8 @@ app.post("/api/telegram/set-webhook", async (req, res) => {
 });
 
 function hasValidWebhookSecret(req: express.Request): boolean {
-  return !TELEGRAM_WEBHOOK_SECRET || safeString(req.header("x-telegram-bot-api-secret-token")) === TELEGRAM_WEBHOOK_SECRET;
+  if (!TELEGRAM_WEBHOOK_SECRET) return true;
+  return timingSafeTokenEqual(safeString(req.header("x-telegram-bot-api-secret-token")), TELEGRAM_WEBHOOK_SECRET);
 }
 
 /**
@@ -1945,11 +1961,8 @@ app.post("/telegram/webhook/:instanceId", async (req, res) => {
 });
 
 app.post("/telegram/webhook", async (req, res) => {
-  if (TELEGRAM_WEBHOOK_SECRET) {
-    const headerSecret = safeString(req.header("x-telegram-bot-api-secret-token"));
-    if (headerSecret !== TELEGRAM_WEBHOOK_SECRET) {
-      return res.status(403).json({ ok: false, error: "Invalid Telegram webhook secret" });
-    }
+  if (TELEGRAM_WEBHOOK_SECRET && !timingSafeTokenEqual(safeString(req.header("x-telegram-bot-api-secret-token")), TELEGRAM_WEBHOOK_SECRET)) {
+    return res.status(403).json({ ok: false, error: "Invalid Telegram webhook secret" });
   }
 
   const entries = botRegistry.entries();
