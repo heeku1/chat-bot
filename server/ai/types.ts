@@ -19,6 +19,8 @@ export interface BrainResult {
   requiresApproval: boolean;
   provider: AiProviderName;
   denied?: boolean;
+  /** สาเหตุที่ provider จริงล้มเหลว (redact key แล้ว) — ใช้ตอน diagnostic ว่าทำไมตกไป offline mode */
+  providerError?: string;
 }
 
 export interface RuntimeAiConfig {

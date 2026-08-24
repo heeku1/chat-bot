@@ -9,7 +9,7 @@ interface GenerateInput {
   notes: Array<{ content: string }>;
 }
 
-export async function generateProviderReply(input: GenerateInput, config: RuntimeAiConfig): Promise<{ reply: string; provider: AiProviderName }> {
+export async function generateProviderReply(input: GenerateInput, config: RuntimeAiConfig): Promise<{ reply: string; provider: AiProviderName; providerError?: string }> {
   if (config.openaiApiKey?.trim()) {
     try {
       const client = new OpenAI({ apiKey: config.openaiApiKey.trim() });
@@ -23,6 +23,7 @@ export async function generateProviderReply(input: GenerateInput, config: Runtim
       if (response.output_text?.trim()) return { reply: response.output_text.trim(), provider: "openai" };
     } catch (error: any) {
       console.error(`[ai] OpenAI request failed: ${safeError(error)}`);
+      openaiLastError = describeError(error);
     }
   }
 
@@ -35,16 +36,34 @@ export async function generateProviderReply(input: GenerateInput, config: Runtim
         contents: `${context ? `${context}\n` : ""}user: ${input.text}`,
         config: { systemInstruction: buildSystemPrompt(config, input.notes) },
       });
-      if (response.text?.trim()) return { reply: response.text.trim(), provider: "gemini" };
+      if (response.text?.trim()) {
+        geminiLastError = undefined;
+        openaiLastError = undefined;
+        return { reply: response.text.trim(), provider: "gemini" };
+      }
     } catch (error: any) {
       console.error(`[ai] Gemini request failed: ${safeError(error)}`);
+      geminiLastError = describeError(error);
     }
   }
 
   return {
     provider: "offline",
     reply: buildOfflineReply(input.intent),
+    providerError: geminiLastError || openaiLastError,
   };
+}
+
+/** เก็บสาเหตุล่าสุดที่ provider ล้มเหลว (redact key แล้ว) เพื่อโชว์ในหน้า diagnostic */
+let geminiLastError: string | undefined;
+let openaiLastError: string | undefined;
+
+/** แปลง error เป็นข้อความอ่านได้ โดยลบ token/key ที่อาจหลุดมากับ message */
+function describeError(error: any): string {
+  const status = Number(error?.status || error?.response?.status || 0);
+  const raw = String(error?.message || error?.error?.message || error?.name || "unknown error");
+  const sanitized = raw.replace(/AIza[0-9A-Za-z_-]{10,}/g, "AIza***").replace(/sk-[0-9A-Za-z_-]{10,}/g, "sk-***");
+  return `${status ? `HTTP ${status}: ` : ""}${sanitized.slice(0, 220)}`;
 }
 
 export interface GeneratedImage {

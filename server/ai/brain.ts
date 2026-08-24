@@ -47,6 +47,7 @@ export class JimmyBrain {
       risk: classification.risk,
       requiresApproval: false,
       provider: generated.provider,
+      providerError: generated.providerError,
     };
   }
 }
