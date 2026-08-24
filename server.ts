@@ -12,6 +12,7 @@ import { ConversationMemory } from "./server/ai/memory";
 import { JimmyReviewer } from "./server/ai/reviewer";
 import { ReviewerMode } from "./server/ai/types";
 import { TelegramUpdateHandler } from "./server/telegram/handlers";
+import { TelegramClient } from "./server/telegram/client";
 import { TelegramPollingRuntime } from "./server/telegram/polling";
 import { BotConfigRegistry, publishAtomically } from "./server/botRegistry";
 import {
@@ -29,7 +30,7 @@ dotenv.config({ path: ".env.local", override: true });
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
 // เวอร์ชัน build — ใช้ยืนยันผ่าน /health ว่า deploy บน Render เป็นโค้ดล่าสุดหรือยัง
-const APP_VERSION = "phase2-menu-1";
+const APP_VERSION = "webhook-unify-1";
 const BOT_TOKEN = (process.env.BOT_TOKEN || process.env.TELEGRAM_BOT_TOKEN || "").trim();
 const WEBHOOK_BASE_URL = (process.env.WEBHOOK_BASE_URL || process.env.RENDER_EXTERNAL_URL || "").replace(/\/$/, "");
 const TELEGRAM_WEBHOOK_SECRET = (process.env.TELEGRAM_WEBHOOK_SECRET || "").trim();
@@ -1026,32 +1027,8 @@ async function handleTelegramMessage(message: any, config: BotConfig, isPublishe
 
   if (!text) return;
 
-  // Forward lead to external API (fire-and-forget, HTTPS only to prevent SSRF)
-  if (config.externalApis?.sendLeadsToApi) {
-    const apiUrl = safeString(config.externalApis.customApiUrl).trim();
-    const apiToken = safeString(config.externalApis.apiAuthToken).trim();
-    if (isSafeExternalUrl(apiUrl)) {
-      const headers: Record<string, string> = { "Content-Type": "application/json" };
-      if (apiToken) {
-        headers.Authorization = "Bearer " + apiToken;
-        headers["X-Api-Key"] = apiToken;
-      }
-      // Send only minimal, non-sensitive user fields
-      const from = message?.from;
-      // apiUrl is validated by isSafeExternalUrl (HTTPS + no private IPs) above
-      fetch(apiUrl, {
-        method: "POST",
-        headers,
-        body: JSON.stringify({
-          chat_id: chatId,
-          chat_type: chatType,
-          message: text,
-          from: from ? { id: from.id, is_bot: from.is_bot, language_code: from.language_code } : undefined,
-          timestamp: new Date().toISOString()
-        })
-      }).catch((err: any) => console.error("Lead forwarding failed:", err.message));
-    }
-  }
+  // Lead forwarding moved to forwardLeadToExternalApi() in processTelegramWebhook
+  // so it runs once for every message regardless of which pipeline handles the reply.
 
   if (chatType === "private" && config.privacySettings.allowDirectMessages === false) {
     await sendMessage(chatId, "🔒 บอทนี้ปิดการคุยส่วนตัวไว้ครับ");
@@ -1183,31 +1160,8 @@ async function handleTelegramMessage(message: any, config: BotConfig, isPublishe
   });
 }
 
-async function handleTelegramCallback(callbackQuery: any, config: BotConfig) {
-  const chatId = callbackQuery?.message?.chat?.id;
-  const data = safeString(callbackQuery?.data);
-  const callbackId = callbackQuery?.id;
-  if (!chatId) return;
-
-  const resolution = resolveButtonAction(compileButtonModel(config), { kind: "callback", value: data });
-  if (resolution.matched && resolution.route === "navigate" && resolution.target) {
-    buttonMenuContexts.set(`${config.instanceId || DEFAULT_INSTANCE_ID}:${chatId}`, resolution.target);
-    const targetPayload = buildTelegramButtonPayload(config, resolution.target);
-    await sendMessage(chatId, resolution.reply || "เมนู:", { reply_markup: targetPayload.replyMarkup });
-    if (targetPayload.inlineMarkup) await sendMessage(chatId, "เมนูใต้ข้อความ:", { reply_markup: targetPayload.inlineMarkup });
-  } else if (resolution.matched && resolution.reply) {
-    await sendMessage(chatId, resolution.reply, { reply_markup: buildReplyKeyboard(config).replyMarkup });
-  } else if (/^live_inline:\d+$/.test(data)) {
-    console.warn("Rejected legacy index callback because it cannot be routed safely", { instanceId: config.instanceId });
-  }
-
-  if (callbackId) {
-    const answered = await telegramApiSafe("answerCallbackQuery", { callback_query_id: callbackId });
-    if (!answered.ok) {
-      console.error("answerCallbackQuery failed:", answered.error);
-    }
-  }
-}
+// handleTelegramCallback removed — ALL callback queries (private + group) are now
+// handled by TelegramUpdateHandler.handleCallback via processTelegramWebhook.
 
 async function handleInlineQuery(inlineQuery: any, config: BotConfig) {
   const queryId = inlineQuery?.id;
@@ -1831,13 +1785,62 @@ function hasValidWebhookSecret(req: express.Request): boolean {
   return !TELEGRAM_WEBHOOK_SECRET || safeString(req.header("x-telegram-bot-api-secret-token")) === TELEGRAM_WEBHOOK_SECRET;
 }
 
+/**
+ * Forward lead to external API (fire-and-forget, HTTPS only to prevent SSRF).
+ * Lives in the webhook path so it runs for BOTH pipelines (legacy group handler
+ * and the new TelegramUpdateHandler used for private chats/callbacks).
+ */
+function forwardLeadToExternalApi(message: any, config: BotConfig) {
+  if (!config.externalApis?.sendLeadsToApi) return;
+  const apiUrl = safeString(config.externalApis.customApiUrl).trim();
+  const apiToken = safeString(config.externalApis.apiAuthToken).trim();
+  if (!isSafeExternalUrl(apiUrl)) return;
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (apiToken) {
+    headers.Authorization = "Bearer " + apiToken;
+    headers["X-Api-Key"] = apiToken;
+  }
+  // Send only minimal, non-sensitive user fields
+  const from = message?.from;
+  const chatId = message?.chat?.id;
+  const chatType = message?.chat?.type || "private";
+  const text = safeString(message?.text);
+  // apiUrl is validated by isSafeExternalUrl (HTTPS + no private IPs) above
+  fetch(apiUrl, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      chat_id: chatId,
+      chat_type: chatType,
+      message: text,
+      from: from ? { id: from.id, is_bot: from.is_bot, language_code: from.language_code } : undefined,
+      timestamp: new Date().toISOString()
+    })
+  }).catch((err: any) => console.error("Lead forwarding failed:", err.message));
+}
+
 async function processTelegramWebhook(instanceId: string, update: any): Promise<void> {
   const entry = botRegistry.resolve(instanceId);
   const token = getRuntimeBotToken(instanceId);
   if (!entry || !token) throw new Error(`No published runtime for bot instance ${instanceId}`);
   await telegramBotContext.run({ instanceId, token }, async () => {
-    if (update?.message) await handleTelegramMessage(update.message, entry.config, true);
-    if (update?.callback_query) await handleTelegramCallback(update.callback_query, entry.config);
+    const message = update?.message;
+    const isPrivateChat = message?.chat?.type === "private";
+
+    // Lead forwarding runs before routing so both pipelines keep the same behavior
+    if (message && safeString(message.text).trim()) forwardLeadToExternalApi(message, entry.config);
+
+    // New pipeline: private-chat messages + ALL callback queries go through TelegramUpdateHandler
+    // so AI brain / approvals / suggestions / 9-capability menu behave identically on webhook & polling.
+    if ((message && isPrivateChat) || update?.callback_query) {
+      telegramUpdateHandler.setBotConfig(entry.config as any);
+      const client = new TelegramClient(token);
+      await telegramUpdateHandler.handle(client, update as any);
+      return;
+    }
+
+    // Legacy pipeline: groups (welcome/anti-spam//rules/keyword monitoring) + inline queries
+    if (message) await handleTelegramMessage(message, entry.config, true);
     if (update?.inline_query) await handleInlineQuery(update.inline_query, entry.config);
   });
 }

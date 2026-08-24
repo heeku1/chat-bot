@@ -5,6 +5,7 @@ import { ConversationMemory } from "../ai/memory";
 import { SuggestionStore, buildThreeLineVersion } from "../ai/suggestions";
 import { RuntimeAiConfig } from "../ai/types";
 import { inlineKeyboard, TelegramCallbackQuery, TelegramClient, TelegramMessage, TelegramUpdate } from "./client";
+import { buildCapabilityMenu, CAPABILITY_MENU_TEXT, resolveCapability } from "./capabilities";
 import { BotConfig } from "../../src/types";
 import { buildTelegramButtonPayload, compileButtonModel, resolveButtonAction, resolveConfigAction } from "../../src/utils/buttonActions";
 
@@ -45,10 +46,16 @@ export class TelegramUpdateHandler {
     const buttonPayload = this.botConfig ? buildTelegramButtonPayload(this.botConfig) : null;
     const buttonModel = buttonPayload?.model;
 
+    // port จาก legacy pipeline: เคารพการตั้งค่าปิดการคุยส่วนตัว
+    if (message.chat.type === "private" && this.botConfig?.privacySettings?.allowDirectMessages === false) {
+      await client.sendMessage(chatId, "🔒 บอทนี้ปิดการคุยส่วนตัวไว้ครับ", buttonPayload?.replyMarkup);
+      return;
+    }
+
     if (command === "/start") {
       this.buttonMenuContexts.set(chatId, "root");
       const startAction = this.botConfig ? resolveConfigAction(this.botConfig, { kind: "command", value: command }) : null;
-      await client.sendMessage(chatId, startAction?.reply || "🤖 สวัสดีครับ ผมคือ Jimmy AI Assistant", buttonPayload?.replyMarkup);
+      await client.sendMessage(chatId, startAction?.reply || safeString(this.botConfig?.botSettings?.welcomeMessage) || "🤖 สวัสดีครับ ผมคือ Jimmy AI Assistant", buttonPayload?.replyMarkup);
       if (buttonPayload?.inlineMarkup) await client.sendMessage(chatId, "เมนูใต้ข้อความ:", buttonPayload.inlineMarkup);
       await this.sendCapabilityMenu(client, chatId);
       return;
@@ -100,6 +107,12 @@ export class TelegramUpdateHandler {
       return;
     }
 
+    // port จาก legacy pipeline: คำสั่งที่ไม่รู้จักตอบเหมือนเดิม (ไม่ปล่อยให้ /xxx หลุดเข้า AI)
+    if (command.startsWith("/")) {
+      await client.sendMessage(chatId, "ยังไม่มีคำสั่งนี้ใน Live Config ครับ กรุณา publish จากหน้าเว็บอีกครั้ง", buttonPayload?.replyMarkup);
+      return;
+    }
+
     if (buttonModel && !command.startsWith("/")) {
       const resolution = resolveButtonAction(buttonModel, { kind: "message", value: text, context: this.buttonMenuContexts.get(chatId) || "root" });
       if (resolution.matched) {
@@ -111,6 +124,24 @@ export class TelegramUpdateHandler {
         if (targetPayload?.inlineMarkup) await client.sendMessage(chatId, "เมนูใต้ข้อความ:", targetPayload.inlineMarkup);
         return;
       }
+    }
+
+    // port จาก legacy pipeline: keyword auto-replies ยังทำงานเหมือนเดิม (substring match แบบเดิม)
+    const autoReply = this.botConfig?.botSettings?.autoReplies?.find((item) => {
+      const keyword = safeString(item.keyword).toLowerCase().trim();
+      return keyword && text.toLowerCase().includes(keyword);
+    });
+    if (autoReply) {
+      const reply = safeString(autoReply.reply) || "รับคำสั่งแล้วครับ";
+      if (autoReply.imageUrl) await client.sendPhoto(chatId, autoReply.imageUrl, reply, buttonPayload?.replyMarkup);
+      else await client.sendMessage(chatId, reply, buttonPayload?.replyMarkup);
+      return;
+    }
+
+    // port จาก legacy pipeline: เมื่อเจ้าของบอทปิด AI Assistant ไม่ควรเรียก brain ตอบเอง
+    if (this.botConfig?.botSettings?.enableAiAssistant === false) {
+      await client.sendMessage(chatId, "ยังไม่มีคำตอบสำหรับข้อความนี้ครับ ลองตั้งค่า Keyword Reply หรือเปิด AI Assistant ในหน้า GUI ได้เลย", buttonPayload?.replyMarkup);
+      return;
     }
 
     const result = await this.dependencies.brain.respond({
@@ -154,7 +185,7 @@ export class TelegramUpdateHandler {
       ]]));
       return;
     }
-    await client.sendMessage(chatId, `${result.reply}${recommendation}`);
+    await client.sendMessage(chatId, `${result.reply}${recommendation}`, buttonPayload?.replyMarkup);
   }
 
   private async handleCallback(client: TelegramClient, callback: TelegramCallbackQuery) {
@@ -242,27 +273,9 @@ export class TelegramUpdateHandler {
     await client.answerCallbackQuery(callback.id, "ไม่รองรับ callback นี้");
   }
 
-  /** เมนู 9 ความสามารถตาม docs/vision-jimmy-brain.md */
+  /** เมนู 9 ความสามารถตาม docs/vision-jimmy-brain.md (shared กับ webhook path ผ่าน capabilities.ts) */
   private async sendCapabilityMenu(client: TelegramClient, chatId: string) {
-    await client.sendMessage(chatId, "🎛️ เมนูความสามารถของ Jimmy\nเลือกได้เลย หรือพิมพ์ภาษาไทยธรรมดาก็สั่งได้", inlineKeyboard([
-      [
-        { text: "💬 คุยกับ AI", callback_data: "cap:chat" },
-        { text: "🎨 สร้างภาพ", callback_data: "cap:image" },
-      ],
-      [
-        { text: "✍️ เขียนคอนเทนต์", callback_data: "cap:content" },
-        { text: "💻 ช่วยเขียนโค้ด", callback_data: "cap:code" },
-      ],
-      [
-        { text: "📢 สร้างโพสต์", callback_data: "cap:post" },
-        { text: "📊 สรุปข้อมูล", callback_data: "cap:summarize" },
-      ],
-      [
-        { text: "👥 เช็กสมาชิก", callback_data: "cap:members" },
-        { text: "🎁 เช็กกิจกรรม", callback_data: "cap:activity" },
-      ],
-      [{ text: "⚙️ เปิดหลังบ้าน", callback_data: "cap:admin" }],
-    ]));
+    await client.sendMessage(chatId, CAPABILITY_MENU_TEXT, buildCapabilityMenu());
   }
 
   private async handleCapabilityCallback(client: TelegramClient, callback: TelegramCallbackQuery, capabilityId: string) {
@@ -272,36 +285,22 @@ export class TelegramUpdateHandler {
       await client.answerCallbackQuery(callback.id, "Callback ไม่ถูกต้อง");
       return;
     }
-
-    const prompts: Record<string, string> = {
-      chat: "💬 พิมพ์คำถามหรือหัวข้อที่อยากคุยได้เลยครับ",
-      image: "🎨 บอกรายละเอียดภาพที่ต้องการได้เลยครับ\nเช่น \"สร้างภาพโปรโมตกาแฟ สไตล์มินิมอล\"",
-      content: "✍️ บอกหัวข้อ/โจทย์คอนเทนต์ได้เลยครับ\nเช่น \"เขียนคอนเทนต์แนะนำร้านกาแฟใหม่\"",
-      code: "💻 ส่งโค้ดหรือ error message มาได้เลยครับ ผมช่วยหาสาเหตุให้",
-      post: "📢 บอกหัวข้อโพสต์ที่ต้องการได้เลยครับ เช่น \"สร้างโพสต์โปรโมชั่นสงกรานต์\"",
-      summarize: "📊 ส่งข้อความ/ข้อมูลที่ต้องการสรุปมาได้เลยครับ",
-      members: "👥 ผมจะสรุปข้อมูลสมาชิกให้ครับ\n(ฟีเจอร์นี้ต้องเชื่อมฐานข้อมูลสมาชิกก่อน — Safe Preview Mode)",
-      activity: "🎁 ผมจะสรุปข้อมูลกิจกรรมให้ครับ\n(ฟีเจอร์นี้ต้องเชื่อมฐานข้อมูลกิจกรรมก่อน — Safe Preview Mode)",
-    };
-
-    if (capabilityId === "admin") {
-      if (!this.dependencies.adminUserIds.has(userId)) {
-        await client.answerCallbackQuery(callback.id, "🔒 เฉพาะ Telegram Admin เท่านั้น");
-        return;
-      }
-      await client.answerCallbackQuery(callback.id, "สำเร็จ");
-      const status = this.dependencies.getRuntimeSummary();
-      await client.sendMessage(chatId, `⚙️ หลังบ้าน (Admin)\n\nTelegram: ${status.running ? "Online" : "Stopped"}\nAI Provider: ${status.provider}\nReviewer: ${capitalize(status.reviewerMode)}\nPending Approvals: ${this.dependencies.approvals.countPending(chatId)}\n\nจัดการเพิ่มเติมได้ที่เว็บแอดมินของโปรเจกต์`);
+    const isAdmin = this.dependencies.adminUserIds.has(userId);
+    if (capabilityId === "admin" && !isAdmin) {
+      await client.answerCallbackQuery(callback.id, "🔒 เฉพาะ Telegram Admin เท่านั้น");
       return;
     }
-
-    const prompt = prompts[capabilityId];
-    if (!prompt) {
+    const resolved = resolveCapability(capabilityId, {
+      isAdmin,
+      runtimeSummary: this.dependencies.getRuntimeSummary(),
+      pendingApprovals: this.dependencies.approvals.countPending(chatId),
+    });
+    if (!resolved) {
       await client.answerCallbackQuery(callback.id, "ไม่รองรับความสามารถนี้");
       return;
     }
     await client.answerCallbackQuery(callback.id, "สำเร็จ");
-    await client.sendMessage(chatId, prompt);
+    await client.sendMessage(chatId, resolved.text);
   }
 
   private async remember(client: TelegramClient, chatId: string, note: string) {
@@ -316,4 +315,8 @@ export class TelegramUpdateHandler {
 
 function capitalize(value: string) {
   return value ? `${value[0].toUpperCase()}${value.slice(1)}` : value;
+}
+
+function safeString(value: any, fallback = "") {
+  return typeof value === "string" ? value : fallback;
 }

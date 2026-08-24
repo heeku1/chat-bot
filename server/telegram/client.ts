@@ -73,6 +73,15 @@ export class TelegramClient {
     }
   }
 
+  async sendPhoto(chatId: string | number, photoUrl: string, caption?: string, replyMarkup?: Record<string, unknown>) {
+    await this.call("sendPhoto", {
+      chat_id: chatId,
+      photo: photoUrl,
+      ...(caption ? { caption: caption.slice(0, 1024) } : {}),
+      ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
+    });
+  }
+
   async answerCallbackQuery(callbackQueryId: string, text?: string) {
     return this.call("answerCallbackQuery", {
       callback_query_id: callbackQueryId,
