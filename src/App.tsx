@@ -255,18 +255,35 @@ export default function App() {
 
   useEffect(() => {
     fetch("/api/auth/me", { credentials: "include" })
-      .then(async (response) => response.ok ? response.json() : null)
-      .then((data) => {
-        if (!data?.user) return;
-        setCurrentUser({
-          username: data.user.username,
-          name: data.user.name,
-          role: data.user.role,
-          isActive: true,
-          botLimit: data.user.role === "admin" ? 10 : 1,
-          createdAt: new Date().toISOString(),
-        });
-        setServerAuthenticated(true);
+      .then(async (response) => {
+        const data = await response.json().catch(() => null);
+        return { ok: response.ok, data };
+      })
+      .then(({ ok, data }) => {
+        if (ok && data?.user) {
+          setCurrentUser({
+            username: data.user.username,
+            name: data.user.name,
+            role: data.user.role,
+            isActive: true,
+            botLimit: data.user.role === 'admin' ? 10 : 1,
+            createdAt: new Date().toISOString(),
+          });
+          setServerAuthenticated(true);
+          return;
+        }
+        // Migration mode: เซิร์ฟเวอร์ยังไม่ตั้ง JIMMY_ADMIN_USERNAME/PASSWORD
+        // API ทั้งหมดเปิดอยู่แล้ว — ไม่ควรดันผู้ใช้ไว้ที่หน้า login จนเข้าไม่ได้
+        if (data?.authConfigured === false) {
+          handleLoginSuccess({
+            username: 'admin',
+            name: 'Platform Administrator',
+            role: 'admin',
+            isActive: true,
+            botLimit: 10,
+            createdAt: new Date().toISOString(),
+          });
+        }
       })
       .catch(() => undefined);
   }, []);

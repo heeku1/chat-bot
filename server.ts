@@ -79,7 +79,10 @@ app.post("/api/auth/login", (req, res) => {
 
 app.get("/api/auth/me", (req, res) => {
   const principal = getPrincipal(req);
-  return principal ? res.json({ ok: true, user: principal }) : res.status(401).json({ ok: false, error: "Authentication required" });
+  // authConfigured=false = migration mode (ยังไม่ตั้ง JIMMY_ADMIN_USERNAME/PASSWORD)
+  // frontend ใช้ flag นี้เพื่อไม่ดันผู้ใช้ไว้ที่หน้า login แบบเข้าไม่ได้เลย
+  if (!principal) return res.status(401).json({ ok: false, error: "Authentication required", authConfigured: isAuthConfigured() });
+  return res.json({ ok: true, user: principal });
 });
 
 app.post("/api/auth/logout", (req, res) => {
