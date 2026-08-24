@@ -8,6 +8,7 @@ export interface PendingApproval {
   chatId: string;
   userId: string;
   intent: string;
+  payload: string;
   summary: string;
   risk: RiskLevel;
   createdAt: string;
@@ -18,7 +19,7 @@ export interface PendingApproval {
 export class ApprovalStore {
   private readonly records = new Map<string, PendingApproval>();
 
-  create(input: Pick<PendingApproval, "chatId" | "userId" | "intent" | "summary" | "risk">) {
+  create(input: Pick<PendingApproval, "chatId" | "userId" | "intent" | "payload" | "summary" | "risk">) {
     this.expireRecords();
     const createdAt = new Date();
     const record: PendingApproval = {

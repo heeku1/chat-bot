@@ -147,6 +147,13 @@ export interface BotConfig {
     openaiApiKey?: string;
   };
 
+  // Data sources สำหรับเช็กสมาชิก/กิจกรรม (read-only JSON API)
+  dataSources?: {
+    membersApiUrl?: string;
+    activityApiUrl?: string;
+    apiToken?: string;
+  };
+
   // Media Library for auto-messages, welcomes, and scheduled posts
   mediaLibrary?: Array<{
     id: string;

@@ -11,6 +11,7 @@ import { JimmyBrain } from "./server/ai/brain";
 import { ConversationMemory } from "./server/ai/memory";
 import { JimmyReviewer } from "./server/ai/reviewer";
 import { ReviewerMode } from "./server/ai/types";
+import { ToolExecutor } from "./server/ai/executor";
 import { TelegramUpdateHandler } from "./server/telegram/handlers";
 import { TelegramClient } from "./server/telegram/client";
 import { TelegramPollingRuntime } from "./server/telegram/polling";
@@ -30,9 +31,12 @@ dotenv.config({ path: ".env.local", override: true });
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
 // เวอร์ชัน build — ใช้ยืนยันผ่าน /health ว่า deploy บน Render เป็นโค้ดล่าสุดหรือยัง
-const APP_VERSION = "webhook-unify-1";
+const APP_VERSION = "tools-live-1";
 const BOT_TOKEN = (process.env.BOT_TOKEN || process.env.TELEGRAM_BOT_TOKEN || "").trim();
 const WEBHOOK_BASE_URL = (process.env.WEBHOOK_BASE_URL || process.env.RENDER_EXTERNAL_URL || "").replace(/\/$/, "");
+// URL ของหน้าเว็บแอดมิน (ใช้ทำ deep-link ปุ่ม "เปิดหลังบ้าน" ในแชต)
+const ADMIN_PANEL_URL = (process.env.ADMIN_PANEL_URL || WEBHOOK_BASE_URL || `http://localhost:${PORT}`).replace(/\/$/, "");
+const RENDER_DEPLOY_HOOK_URL = (process.env.RENDER_DEPLOY_HOOK_URL || "").trim();
 const TELEGRAM_WEBHOOK_SECRET = (process.env.TELEGRAM_WEBHOOK_SECRET || "").trim();
 const GEMINI_API_KEY = (process.env.GEMINI_API_KEY || "").trim();
 const OPENAI_API_KEY = (process.env.OPENAI_API_KEY || "").trim();
@@ -110,6 +114,11 @@ type BotConfig = {
     sendLeadsToApi?: boolean;
     geminiApiKey?: string;
     openaiApiKey?: string;
+  };
+  dataSources?: {
+    membersApiUrl?: string;
+    activityApiUrl?: string;
+    apiToken?: string;
   };
   mediaLibrary?: Array<{ id: string; name: string; url: string; type: string }>;
   marketingSettings?: {
@@ -329,6 +338,45 @@ const conversationMemory = new ConversationMemory();
 const approvalStore = new ApprovalStore();
 const jimmyReviewer = new JimmyReviewer();
 const jimmyBrain = new JimmyBrain(conversationMemory, jimmyReviewer);
+const toolExecutor = new ToolExecutor({
+  listBroadcastTargets: () => conversationMemory.listChatIds(),
+  sendBroadcastMessage: async (chatId, text) => {
+    const token = telegramBotContext.getStore()?.token || BOT_TOKEN;
+    if (!token) throw new Error("Missing BOT_TOKEN");
+    await new TelegramClient(token).sendMessage(chatId, text);
+  },
+  triggerDeploy: async () => {
+    if (!RENDER_DEPLOY_HOOK_URL) {
+      return { ok: false, message: "⚠️ ยังไม่ได้ตั้ง RENDER_DEPLOY_HOOK_URL\n\nเอา URL จาก Render Dashboard → Deploy Hook มาใส่ใน Environment ก่อน แล้วค่อยสั่ง deploy ผมได้ครับ" };
+    }
+    try {
+      const response = await fetch(RENDER_DEPLOY_HOOK_URL, { method: "POST" });
+      return response.ok
+        ? { ok: true, message: "🚀 สั่ง Deploy แล้วครับ\n\nRender กำลัง build เวอร์ชันใหม่ (ใช้เวลา ~5-10 นาที)\nตรวจสถานะได้ที่ /health → gitCommit" }
+        : { ok: false, message: `❌ Deploy Hook ตอบ HTTP ${response.status} — ลองใหม่หรือ deploy เองผม Render Dashboard ครับ` };
+    } catch (err: any) {
+      return { ok: false, message: `❌ เรียก Deploy Hook ไม่สำเร็จ: ${err?.message || err}` };
+    }
+  },
+  repairWebhook: async () => {
+    const token = telegramBotContext.getStore()?.token || BOT_TOKEN;
+    const instanceId = telegramBotContext.getStore()?.instanceId || DEFAULT_INSTANCE_ID;
+    if (!token || !WEBHOOK_BASE_URL) {
+      return { ok: false, message: "⚠️ Restart บนโหมด webhook ไม่จำเป็นต้องทำเอง\n\nแต่ยังตั้ง WEBHOOK_BASE_URL ไม่ครบ จึงซ่อม webhook อัตโนมัติไม่ได้ครับ" };
+    }
+    try {
+      const payload: Record<string, any> = {
+        url: `${WEBHOOK_BASE_URL}/telegram/webhook/${instanceId}`,
+        allowed_updates: ["message", "callback_query", "inline_query"],
+      };
+      if (TELEGRAM_WEBHOOK_SECRET) payload.secret_token = TELEGRAM_WEBHOOK_SECRET;
+      await telegramApi("setWebhook", payload, token);
+      return { ok: true, message: `🔄 ซ่อม webhook สำเร็จ\n\nชี้กลับไปที่ ${payload.url} แล้ว\n(โหมด webhook ไม่ต้อง restart process — ข้อความเข้าปกติแล้วครับ)` };
+    } catch (err: any) {
+      return { ok: false, message: `❌ ซ่อม webhook ไม่สำเร็จ: ${err?.message || err}` };
+    }
+  },
+});
 let telegramRuntime: TelegramPollingRuntime;
 
 const telegramUpdateHandler = new TelegramUpdateHandler({
@@ -336,6 +384,8 @@ const telegramUpdateHandler = new TelegramUpdateHandler({
   approvals: approvalStore,
   brain: jimmyBrain,
   adminUserIds: TELEGRAM_ADMIN_USER_IDS,
+  executor: toolExecutor,
+  getAdminUrl: () => ADMIN_PANEL_URL,
   getAiConfig: () => telegramRuntime?.getAiConfig() || {
     openaiApiKey: OPENAI_API_KEY,
     geminiApiKey: GEMINI_API_KEY,
@@ -386,6 +436,10 @@ function stripTokenFromConfig(config: BotConfig): BotConfig {
       apiAuthToken: "",
       geminiApiKey: "",
       openaiApiKey: ""
+    },
+    dataSources: {
+      ...(config.dataSources || {}),
+      apiToken: ""
     }
   };
 }
@@ -403,6 +457,11 @@ function normalizeConfig(input: any): BotConfig {
       autoReplies: Array.isArray(input?.botSettings?.autoReplies) ? input.botSettings.autoReplies : base.botSettings.autoReplies
     },
     botCommands: Array.isArray(input?.botCommands) ? input.botCommands : base.botCommands,
+    dataSources: {
+      membersApiUrl: safeString(input?.dataSources?.membersApiUrl).trim(),
+      activityApiUrl: safeString(input?.dataSources?.activityApiUrl).trim(),
+      apiToken: safeString(input?.dataSources?.apiToken).trim()
+    },
     botButtons: {
       inlineButtons: Array.isArray(input?.botButtons?.inlineButtons) ? input.botButtons.inlineButtons : base.botButtons?.inlineButtons || [],
       replyKeyboard: Array.isArray(input?.botButtons?.replyKeyboard) ? input.botButtons.replyKeyboard : base.botButtons?.replyKeyboard || []

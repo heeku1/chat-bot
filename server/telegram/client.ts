@@ -82,6 +82,25 @@ export class TelegramClient {
     });
   }
 
+  /** อัปโหลดภาพจากหน่วยความจำ (เช่น ภาพที่ AI generate เป็น base64) แบบ multipart — Telegram ไม่รับ data: URL */
+  async sendPhotoBuffer(chatId: string | number, bytes: Buffer, filename: string, caption?: string, replyMarkup?: Record<string, unknown>) {
+    const form = new FormData();
+    form.append("chat_id", String(chatId));
+    if (caption) form.append("caption", caption.slice(0, 1024));
+    if (replyMarkup) form.append("reply_markup", JSON.stringify(replyMarkup));
+    form.append("photo", new Blob([new Uint8Array(bytes)], { type: "image/jpeg" }), filename);
+    const response = await fetch(`${TELEGRAM_API_BASE}/bot${this.token}/sendPhoto`, { method: "POST", body: form });
+    const data = await response.json().catch(() => ({})) as { ok?: boolean; description?: string; error_code?: number; parameters?: { retry_after?: number } };
+    if (!response.ok || data.ok === false) {
+      throw new TelegramApiError(
+        data.description || `Telegram sendPhoto failed`,
+        response.status,
+        data.error_code,
+        data.parameters?.retry_after,
+      );
+    }
+  }
+
   async answerCallbackQuery(callbackQueryId: string, text?: string) {
     return this.call("answerCallbackQuery", {
       callback_query_id: callbackQueryId,
@@ -115,7 +134,7 @@ export class TelegramClient {
   }
 }
 
-export function inlineKeyboard(rows: Array<Array<{ text: string; callback_data: string }>>) {
+export function inlineKeyboard(rows: Array<Array<{ text: string; callback_data?: string; url?: string }>>) {
   return { inline_keyboard: rows };
 }
 

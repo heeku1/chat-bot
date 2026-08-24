@@ -1,8 +1,11 @@
 import { randomUUID } from "crypto";
 import { ApprovalStore } from "../ai/approvals";
+import { ToolExecutor } from "../ai/executor";
 import { JimmyBrain } from "../ai/brain";
 import { ConversationMemory } from "../ai/memory";
+import { generateProviderImage } from "../ai/provider";
 import { SuggestionStore, buildThreeLineVersion } from "../ai/suggestions";
+import { classifyIntent } from "../ai/safety";
 import { RuntimeAiConfig } from "../ai/types";
 import { inlineKeyboard, TelegramCallbackQuery, TelegramClient, TelegramMessage, TelegramUpdate } from "./client";
 import { buildCapabilityMenu, CAPABILITY_MENU_TEXT, resolveCapability } from "./capabilities";
@@ -14,6 +17,8 @@ interface HandlerDependencies {
   approvals: ApprovalStore;
   brain: JimmyBrain;
   adminUserIds: Set<string>;
+  executor: ToolExecutor;
+  getAdminUrl: () => string;
   getAiConfig: () => RuntimeAiConfig;
   getRuntimeSummary: () => { running: boolean; provider: string; reviewerMode: string };
 }
@@ -144,6 +149,20 @@ export class TelegramUpdateHandler {
       return;
     }
 
+    // เช็กสมาชิก/กิจกรรม: ถ้าเชื่อม data source ไว้แล้ว ดึงข้อมูลจริงจาก API
+    // ถ้ายังไม่เชื่อม ตอบตรง ๆ ว่าต้องตั้งค่าก่อน (ไม่ปล่อยให้ AI เดาข้อมูล)
+    const classification = classifyIntent(text);
+    if (classification.intent === "member_check" || classification.intent === "activity_check") {
+      const summary = await this.fetchDataSourceSummary(classification.intent);
+      if (summary) {
+        await client.sendMessage(chatId, summary, buttonPayload?.replyMarkup);
+        return;
+      }
+      const label = classification.intent === "member_check" ? "สมาชิก" : "กิจกรรม";
+      await client.sendMessage(chatId, `👥 ยังไม่ได้เชื่อมฐานข้อมูล${label}ครับ\n\nตั้งค่า URL ได้ที่หน้าเว็บแอดมิน → ตั้งค่าขั้นสูง → Data Sources\n(รองรับ API ที่คืนค่า JSON อ่านอย่างเดียว)`, buttonPayload?.replyMarkup);
+      return;
+    }
+
     const result = await this.dependencies.brain.respond({
       chatId,
       userId,
@@ -160,9 +179,10 @@ export class TelegramUpdateHandler {
         intent: result.intent,
         summary: text.slice(0, 240),
         risk: result.risk,
+        payload: text,
       });
       const recommendation = result.recommendation ? `\n\n💡 Jimmy แนะนำ\n${result.recommendation}` : "";
-      await client.sendMessage(chatId, `⚠️ ต้องยืนยันก่อน\n\nคำสั่ง:\n${approval.summary}\n\nความเสี่ยง: ${approval.risk.toUpperCase()}\nอาจกระทบระบบหรือข้อมูล${recommendation}`, inlineKeyboard([[
+      await client.sendMessage(chatId, `⚠️ ต้องยืนยันก่อน\n\nคำสั่ง:\n${approval.summary}\n\nความเสี่ยง: ${approval.risk.toUpperCase()}\nกดยืนยันแล้วระบบจะทำงานจริง${recommendation}`, inlineKeyboard([[
         { text: "✅ ยืนยัน", callback_data: `approve:${approval.id}` },
         { text: "❌ ยกเลิก", callback_data: `cancel:${approval.id}` },
       ]]));
@@ -170,6 +190,22 @@ export class TelegramUpdateHandler {
     }
 
     const recommendation = result.recommendation ? `\n\n💡 Jimmy แนะนำ\n${result.recommendation}` : "";
+
+    // สร้างภาพจริง: ถ้า intent คือ generate_image ลองเรียก Imagen/gpt-image-1 ก่อน
+    // สำเร็จ → ส่งรูปเลย / ล้มเหลว → ตอบข้อความตาม provider (offline guidance หรือแจ้ง error)
+    if (result.intent === "generate_image") {
+      const { image, error } = await generateProviderImage(text, this.dependencies.getAiConfig());
+      if (image) {
+        await client.sendPhotoBuffer(chatId, image.bytes, "jimmy-image.jpg", `🎨 ${text.slice(0, 300)}`, buttonPayload?.replyMarkup);
+        return;
+      }
+      const reason = error === "no-provider"
+        ? "ยังไม่ได้ใส่ GEMINI_API_KEY หรือ OPENAI_API_KEY"
+        : "ผู้ให้บริการสร้างภาพตอบไม่สำเร็จ ลองใหม่อีกครั้งครับ";
+      await client.sendMessage(chatId, `🎨 ยังสร้างภาพไม่สำเร็จครับ\n(${reason})`, buttonPayload?.replyMarkup);
+      return;
+    }
+
     if (result.recommendation && result.reply.length > 160) {
       // ย้อนแนะนำ: เสนอเวอร์ชันสั้น 3 บรรทัดให้เลือก [ใช้แบบแนะนำ]/[ใช้แบบเดิม]
       const suggestion = this.suggestions.create({
@@ -250,10 +286,19 @@ export class TelegramUpdateHandler {
         await client.answerCallbackQuery(callback.id, "รายการไม่พบ หมดอายุ หรือไม่มีสิทธิ์");
         return;
       }
-      await client.answerCallbackQuery(callback.id, action === "approve" ? "ยืนยันแล้ว" : "ยกเลิกแล้ว");
-      await client.sendMessage(chatId, action === "approve"
-        ? "✅ ยืนยันคำสั่งแล้ว\n\nPhase นี้ยังเป็น Safe Preview Mode\nยังไม่มีการ Restart/Deploy/Database action จริง"
-        : "❌ ยกเลิกคำสั่งแล้ว\nไม่มี action ใดถูกเรียกใช้");
+      await client.answerCallbackQuery(callback.id, action === "approve" ? "ยืนยันแล้ว กำลังทำงาน" : "ยกเลิกแล้ว");
+      if (action === "cancel") {
+        await client.sendMessage(chatId, "❌ ยกเลิกคำสั่งแล้ว\nไม่มี action ใดถูกเรียกใช้");
+        return;
+      }
+      // ผ่านการยืนยันแล้ว → รัน tool จริง (broadcast/deploy/webhook-repair)
+      try {
+        const outcome = await this.dependencies.executor.execute(record.intent, record.payload || record.summary);
+        await client.sendMessage(chatId, outcome.message);
+      } catch (err: any) {
+        console.error("[executor] tool execution failed:", err?.message || err);
+        await client.sendMessage(chatId, `❌ ทำงานไม่สำเร็จ: ${String(err?.message || err).slice(0, 200)}`);
+      }
       return;
     }
 
@@ -300,7 +345,34 @@ export class TelegramUpdateHandler {
       return;
     }
     await client.answerCallbackQuery(callback.id, "สำเร็จ");
-    await client.sendMessage(chatId, resolved.text);
+    await client.sendMessage(chatId, resolved.text, resolved.markup);
+  }
+
+  /** ดึงข้อมูลสมาชิก/กิจกรรมจริงจาก data source ที่ตั้งไว้ — คืน null ถ้ายังไม่ได้เชื่อมหรือ API ล้มเหลว */
+  private async fetchDataSourceSummary(intent: string): Promise<string | null> {
+    const sources = this.botConfig?.dataSources;
+    if (!sources) return null;
+    const url = (intent === "member_check" ? sources.membersApiUrl : sources.activityApiUrl)?.trim();
+    if (!url || !/^https:\/\//i.test(url)) return null;
+    const label = intent === "member_check" ? "สมาชิก" : "กิจกรรม";
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 8000);
+    try {
+      const headers: Record<string, string> = { Accept: "application/json" };
+      if (sources.apiToken?.trim()) headers.Authorization = `Bearer ${sources.apiToken.trim()}`;
+      const response = await fetch(url, { headers, signal: controller.signal });
+      if (!response.ok) {
+        return `⚠️ API${label}ตอบ HTTP ${response.status} — ตรวจ URL/Token อีกครั้งครับ`;
+      }
+      const data = await response.json().catch(() => null);
+      if (data === null) return `⚠️ API${label}ไม่ได้ส่ง JSON กลับมาครับ`;
+      return formatDataSourceSummary(label, data);
+    } catch (err: any) {
+      console.error("[data-source] fetch failed:", err?.message || err);
+      return `⚠️ เชื่อมต่อ API${label}ไม่สำเร็จ (${String(err?.name || err).slice(0, 60)})`;
+    } finally {
+      clearTimeout(timeout);
+    }
   }
 
   private async remember(client: TelegramClient, chatId: string, note: string) {
@@ -319,4 +391,36 @@ function capitalize(value: string) {
 
 function safeString(value: any, fallback = "") {
   return typeof value === "string" ? value : fallback;
+}
+
+/** จัดรูปข้อมูล JSON จาก data source เป็นข้อความสรุปกระชับ (pure function เพื่อเทสต์ได้) */
+export function formatDataSourceSummary(label: string, data: unknown): string {
+  const header = `📊 สรุปข้อมูล${label} (จาก API จริง)\n`;
+  if (Array.isArray(data)) {
+    const rows = data.slice(0, 5).map((item, index) => `${index + 1}. ${describeRecord(item)}`);
+    const more = data.length > 5 ? `\n...และอีก ${data.length - 5} รายการ` : "";
+    return `${header}รวมทั้งหมด ${data.length} รายการ\n\n${rows.join("\n")}${more}`;
+  }
+  if (data && typeof data === "object") {
+    const record = data as Record<string, unknown>;
+    const list = Array.isArray(record.data) ? record.data : Array.isArray(record.items) ? record.items : Array.isArray(record.members) ? record.members : null;
+    if (list) return formatDataSourceSummary(label, list);
+    const total = record.total ?? record.count ?? record.memberCount;
+    if (total !== undefined) {
+      return `${header}รวมทั้งหมด ${total} รายการ\n\n${describeRecord(record)}`;
+    }
+    return `${header}${JSON.stringify(record, null, 2).slice(0, 800)}`;
+  }
+  return `${header}${String(data).slice(0, 800)}`;
+}
+
+function describeRecord(item: unknown): string {
+  if (item === null || item === undefined) return "-";
+  if (typeof item !== "object") return String(item).slice(0, 80);
+  const record = item as Record<string, unknown>;
+  const name = record.name ?? record.title ?? record.username ?? record.id ?? record.key;
+  const detail = record.status ?? record.points ?? record.joinedAt ?? record.date ?? record.value;
+  const nameText = name === undefined ? "" : String(name).slice(0, 60);
+  const detailText = detail === undefined || detail === name ? "" : ` — ${String(detail).slice(0, 60)}`;
+  return `${nameText}${detailText}` || "-";
 }

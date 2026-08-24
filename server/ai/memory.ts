@@ -47,6 +47,11 @@ export class ConversationMemory {
     return this.data.chats[chatId]?.notes.slice(-20) || [];
   }
 
+  /** chat ids ทั้งหมดที่เคยมีการโต้ตอบ (ใช้เป็น broadcast targets) */
+  listChatIds() {
+    return Object.keys(this.data.chats);
+  }
+
   addMessage(chatId: string, role: MemoryRole, rawContent: string) {
     if (!this.data.enabled) return;
     const content = this.sanitize(rawContent);

@@ -288,6 +288,13 @@ export default function ConfigForm({ config, onChange, liveStatus }: ConfigFormP
     });
   };
 
+  const updateDataSources = (fields: Partial<NonNullable<BotConfig['dataSources']>>) => {
+    onChange({
+      ...config,
+      dataSources: { ...config.dataSources, ...fields }
+    });
+  };
+
   // Group Settings Update Helper
   const updateGroupSettings = (fields: Partial<BotConfig['groupSettings']>) => {
     onChange({
@@ -2137,6 +2144,48 @@ export default function ConfigForm({ config, onChange, liveStatus }: ConfigFormP
                     onChange={(e) => updatePrivacySettings({ hideBotCreator: e.target.checked })}
                   />
                 </label>
+              </div>
+            </div>
+
+            <div className="bg-[#111114] border border-white/5 rounded-2xl p-4 space-y-4">
+              <div className="flex items-center gap-1.5 text-xs font-bold text-indigo-400 border-b border-white/5 pb-2">
+                <Users className="w-4 h-4 text-indigo-400" />
+                Data Sources สำหรับเช็กสมาชิกและกิจกรรม
+              </div>
+              <p className="text-[10px] text-gray-400">
+                ใช้เฉพาะ API แบบอ่านข้อมูลที่คืน JSON ผ่าน HTTPS ระบบจะไม่เดาข้อมูลเมื่อยังไม่ได้เชื่อมต่อ
+              </p>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-300 mb-1">Members API URL</label>
+                  <input
+                    type="url"
+                    className="w-full bg-black/40 border border-white/5 focus:border-indigo-500 rounded-xl px-3 py-2 text-xs text-slate-200 font-mono focus:outline-none transition-all"
+                    placeholder="https://api.example.com/members"
+                    value={config.dataSources?.membersApiUrl ?? ""}
+                    onChange={(e) => updateDataSources({ membersApiUrl: e.target.value })}
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-300 mb-1">Activity API URL</label>
+                  <input
+                    type="url"
+                    className="w-full bg-black/40 border border-white/5 focus:border-indigo-500 rounded-xl px-3 py-2 text-xs text-slate-200 font-mono focus:outline-none transition-all"
+                    placeholder="https://api.example.com/activities"
+                    value={config.dataSources?.activityApiUrl ?? ""}
+                    onChange={(e) => updateDataSources({ activityApiUrl: e.target.value })}
+                  />
+                </div>
+              </div>
+              <div>
+                <label className="block text-[11px] font-semibold text-slate-300 mb-1">Data Source API Token</label>
+                <input
+                  type="password"
+                  className="w-full bg-black/40 border border-white/5 focus:border-indigo-500 rounded-xl px-3 py-2 text-xs text-slate-200 font-mono focus:outline-none transition-all"
+                  placeholder="Bearer token (ถ้ามี)"
+                  value={config.dataSources?.apiToken ?? ""}
+                  onChange={(e) => updateDataSources({ apiToken: e.target.value })}
+                />
               </div>
             </div>
 

@@ -29,6 +29,9 @@ services:
       # --- Set after first deploy: https://<your-service>.onrender.com ---
       - key: WEBHOOK_BASE_URL
         sync: false
+      # Optional: enables the approved deploy action from Telegram
+      - key: RENDER_DEPLOY_HOOK_URL
+        sync: false
       # Ephemeral disk on free plan; state resets on redeploy
       - key: STATE_FILE
         value: /tmp/jimmy-bot-config.json

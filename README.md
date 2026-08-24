@@ -38,6 +38,8 @@ npm run dev                  # http://localhost:3000
    - `TELEGRAM_ADMIN_USER_IDS` — user ID ผู้ดูแล (คั่นด้วย comma)
    - `GEMINI_API_KEY` หรือ `OPENAI_API_KEY`
    - `WEBHOOK_BASE_URL` — ใส่ URL ของ service เช่น `https://jimmy-chat-bot.onrender.com`
+   - `RENDER_DEPLOY_HOOK_URL` — ไม่บังคับ ถ้าต้องการให้คำสั่ง deploy ที่ผ่านการยืนยันสั่ง Render ได้
+   - `ADMIN_PANEL_URL` — ไม่บังคับ URL หน้าเว็บสำหรับปุ่ม "เปิดหลังบ้าน" ใน Telegram
 4. Save → Render จะ redeploy ให้เอง แล้วบอทจะรับ webhook อัตโนมัติ
 
 **ตรวจสอบสถานะ:** เปิด `/health` — ต้องได้ `"ok":true`
@@ -49,6 +51,16 @@ npm run dev                  # http://localhost:3000
 ## Env Variables ทั้งหมด
 
 ดูได้ที่ [.env.example](.env.example)
+
+### Data Sources สมาชิก/กิจกรรม
+
+ตั้งค่าได้จากหน้า Admin → การตั้งค่าขั้นสูง โดยใช้ API แบบอ่านอย่างเดียวที่ตอบ JSON ผ่าน HTTPS:
+
+- `Members API URL` สำหรับคำสั่งเช็กสมาชิก
+- `Activity API URL` สำหรับคำสั่งเช็กกิจกรรม
+- `Data Source API Token` เป็น Bearer token หาก API ต้องยืนยันตัวตน
+
+Token จะถูกล้างออกจาก config ที่เผยแพร่/แสดงใน registry snapshot และระบบจะไม่เรียก API หาก URL ไม่ใช่ HTTPS
 
 ## โครงสร้างโปรเจกต์
 

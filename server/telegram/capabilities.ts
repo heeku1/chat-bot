@@ -43,15 +43,26 @@ export interface CapabilityContext {
   isAdmin: boolean;
   runtimeSummary: { running: boolean; provider: string; reviewerMode: string };
   pendingApprovals: number;
+  /** URL หน้าเว็บแอดมิน — ถ้ามีจะแถมปุ่ม deep-link "เปิดหลังบ้าน" */
+  adminUrl?: string;
 }
 
-/** คืนข้อความที่ต้องส่ง หรือ null ถ้าไม่รองรับ/ไม่มีสิทธิ์ */
-export function resolveCapability(capabilityId: string, context: CapabilityContext): { text: string } | null {
+export interface ResolvedCapability {
+  text: string;
+  markup?: Record<string, unknown>;
+}
+
+/** คืนข้อความ+ปุ่มที่ต้องส่ง หรือ null ถ้าไม่รองรับ/ไม่มีสิทธิ์ */
+export function resolveCapability(capabilityId: string, context: CapabilityContext): ResolvedCapability | null {
   if (capabilityId === "admin") {
     if (!context.isAdmin) return null;
     const status = context.runtimeSummary;
+    const markup = context.adminUrl
+      ? inlineKeyboard([[{ text: "🌐 เปิดหลังบ้าน (Web Admin)", url: context.adminUrl }]])
+      : undefined;
     return {
-      text: `⚙️ หลังบ้าน (Admin)\n\nTelegram: ${status.running ? "Online" : "Stopped"}\nAI Provider: ${status.provider}\nReviewer: ${capitalize(status.reviewerMode)}\nPending Approvals: ${context.pendingApprovals}\n\nจัดการเพิ่มเติมได้ที่เว็บแอดมินของโปรเจกต์`,
+      text: `⚙️ หลังบ้าน (Admin)\n\nTelegram: ${status.running ? "Online" : "Stopped"}\nAI Provider: ${status.provider}\nReviewer: ${capitalize(status.reviewerMode)}\nPending Approvals: ${context.pendingApprovals}\n\nกดปุ่มด้านล่างเพื่อเปิดหน้าเว็บแอดมินได้เลย`,
+      markup,
     };
   }
   const prompt = CAPABILITY_PROMPTS[capabilityId];
