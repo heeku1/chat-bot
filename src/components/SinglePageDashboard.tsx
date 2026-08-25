@@ -61,14 +61,52 @@ interface TopicCount {
   count: number;
 }
 
+/** payload จาก GET /api/metrics/summary (ข้อมูลจริงจาก backend) */
+interface MetricsSummary {
+  generatedAt: string;
+  kpis: { chatsToday: number; successRate: number; handover: number; avgResponseSec: number };
+  deltas: { chatsPct: number; successDelta: number; handoverPct: number; responsePct: number };
+  hourly: VolumePoint[];
+  daily: VolumePoint[];
+  topics: TopicCount[];
+}
+
+/** payload จาก SSE /api/metrics/stream และ GET /api/metrics/activity */
+interface ActivityItem {
+  id: string;
+  ts: string;
+  chatRef: string;
+  userName: string;
+  text: string;
+  intent: string;
+  sentiment: Sentiment;
+  handover: boolean;
+  answered: boolean;
+  responseMs: number | null;
+}
+
+function toLiveMessage(item: ActivityItem): LiveMessage {
+  return {
+    id: item.id,
+    user: item.userName,
+    text: item.text,
+    intent: item.intent,
+    sentiment: item.sentiment,
+    at: new Date(item.ts),
+    handover: item.handover,
+    responseMs: item.responseMs,
+  };
+}
+
 interface LiveMessage {
-  id: number;
+  id: string;
   user: string;
   text: string;
   intent: string;
   sentiment: Sentiment;
   at: Date;
   handover: boolean;
+  responseMs?: number | null;
 }
 
 interface HealthInfo {
@@ -175,7 +213,7 @@ function seedFeed(): LiveMessage[] {
   return Array.from({ length: 8 }, (_, i) => {
     const s = pick(SAMPLE_MESSAGES);
     return {
-      id: 100 - i,
+      id: String(100 - i),
       user: pick(USER_POOL),
       text: s.text,
       intent: s.intent,
@@ -201,6 +239,10 @@ function Sparkline({ values, stroke }: { values: number[]; stroke: string }) {
       <polyline points={pts} fill="none" stroke={stroke} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
+}
+
+function SkeletonBlock({ className }: { className?: string }) {
+  return <div className={`animate-pulse rounded-xl bg-slate-500/15 ${className ?? ""}`} />;
 }
 
 function DeltaBadge({ value, goodWhenDown }: { value: number; goodWhenDown?: boolean }) {
@@ -270,13 +312,19 @@ export default function SinglePageDashboard({ config, theme, onToggleTheme, onSw
     daily: buildDaily(),
   });
   const [topics, setTopics] = useState<TopicCount[]>(INITIAL_TOPICS);
-  const [kpis, setKpis] = useState({ chatsToday: 342, successRate: 94.6, handover: 7, avgResponse: 2.4 });
+  const [kpis, setKpis] = useState({ chatsToday: 342, successRate: 94.6, handover: 7, avgResponseSec: 2.4 });
   const [chatsSpark, setChatsSpark] = useState<number[]>(() =>
     Array.from({ length: 18 }, (_, i) => 300 + i * 2.4 + rand(-8, 8)),
   );
   const [feed, setFeed] = useState<LiveMessage[]>(seedFeed);
   const [paused, setPaused] = useState(false);
   const [now, setNow] = useState(() => new Date());
+
+  /* ---- real live data (ข้อมูลจริงจาก backend) ---- */
+  const [summary, setSummary] = useState<MetricsSummary | null>(null);
+  const [realFeed, setRealFeed] = useState<LiveMessage[]>([]);
+  const [dataMode, setDataMode] = useState<"loading" | "live" | "polling" | "simulated">("loading");
+  const [connError, setConnError] = useState<string | null>(null);
 
   /* ---- real system status ---- */
   const [health, setHealth] = useState<HealthInfo | null>(null);
@@ -295,6 +343,11 @@ export default function SinglePageDashboard({ config, theme, onToggleTheme, onSw
   useEffect(() => {
     kpisRef.current = kpis;
   }, [kpis]);
+  const pausedRef = useRef(paused);
+  useEffect(() => {
+    pausedRef.current = paused;
+  }, [paused]);
+  const sseOpenRef = useRef(false);
 
   const showToast = useCallback((kind: "ok" | "warn", msg: string) => {
     if (toastTimer.current) clearTimeout(toastTimer.current);
@@ -308,15 +361,15 @@ export default function SinglePageDashboard({ config, theme, onToggleTheme, onSw
     return () => clearInterval(iv);
   }, []);
 
-  /* ---- live tick: feed + kpis + charts ---- */
+  /* ---- live tick (โหมดจำลองเท่านั้น — ใช้เมื่อดึงข้อมูลจริงไม่ได้) ---- */
   useEffect(() => {
-    if (paused) return undefined;
+    if (paused || dataMode !== "simulated") return undefined;
     const iv = setInterval(() => {
       if (Math.random() < 0.74) {
         const s = pick(SAMPLE_MESSAGES);
         const handover = s.sentiment === "negative" && Math.random() < 0.55;
         const msg: LiveMessage = {
-          id: (idRef.current += 1),
+          id: String((idRef.current += 1)),
           user: pick(USER_POOL),
           text: s.text,
           intent: s.intent,
@@ -331,7 +384,7 @@ export default function SinglePageDashboard({ config, theme, onToggleTheme, onSw
           chatsToday: cur.chatsToday + 1,
           successRate: clamp(cur.successRate + rand(-0.35, 0.42), 86, 99.4),
           handover: cur.handover + (handover ? 1 : Math.random() < 0.04 ? 1 : 0),
-          avgResponse: clamp(cur.avgResponse + rand(-0.14, 0.17), 1.1, 4.8),
+          avgResponseSec: clamp(cur.avgResponseSec + rand(-0.14, 0.17), 1.1, 4.8),
         };
         setKpis(next);
         setChatsSpark((h) => [...h.slice(-17), next.chatsToday]);
@@ -343,7 +396,7 @@ export default function SinglePageDashboard({ config, theme, onToggleTheme, onSw
       }
     }, 2800);
     return () => clearInterval(iv);
-  }, [paused]);
+  }, [paused, dataMode]);
 
   /* ---- poll real backend status ---- */
   const loadSystem = useCallback(async () => {
@@ -374,6 +427,107 @@ export default function SinglePageDashboard({ config, theme, onToggleTheme, onSw
     const iv = setInterval(() => void loadSystem(), 15_000);
     return () => clearInterval(iv);
   }, [loadSystem]);
+
+  /* ---- ดึงสรุป metrics จริง (KPI/กราฟ/Top5) ทุก 15 วินาที ---- */
+  const loadSummary = useCallback(async () => {
+    try {
+      const res = await fetch("/api/metrics/summary", { headers: { Accept: "application/json" } });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = (await res.json()) as MetricsSummary & { ok: boolean };
+      setSummary({
+        generatedAt: data.generatedAt,
+        kpis: data.kpis,
+        deltas: data.deltas ?? { chatsPct: 0, successDelta: 0, handoverPct: 0, responsePct: 0 },
+        hourly: Array.isArray(data.hourly) ? data.hourly : [],
+        daily: Array.isArray(data.daily) ? data.daily : [],
+        topics: Array.isArray(data.topics) ? data.topics : [],
+      });
+      setDataMode((mode) => {
+        if (mode === "live") return "live";
+        return sseOpenRef.current ? "live" : "polling";
+      });
+      setConnError(null);
+    } catch (err) {
+      setConnError(err instanceof Error ? err.message : "unknown error");
+      setDataMode((mode) => (mode === "loading" ? "simulated" : mode));
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadSummary();
+    const iv = setInterval(() => void loadSummary(), 15_000);
+    return () => clearInterval(iv);
+  }, [loadSummary]);
+
+  /* ---- Live Activity แบบ real-time: SSE ก่อน ถ้าไม่ได้ fallback ไป polling ---- */
+  useEffect(() => {
+    let source: EventSource | null = null;
+    let pollTimer: ReturnType<typeof setInterval> | null = null;
+    let cancelled = false;
+
+    const ingest = (items: ActivityItem[]) => {
+      if (pausedRef.current || !items.length) return;
+      setRealFeed((prev) => {
+        const seen = new Set(prev.map((m) => m.id));
+        const fresh = items.filter((item) => item && !seen.has(item.id)).map(toLiveMessage);
+        return [...fresh, ...prev].slice(0, 24);
+      });
+    };
+
+    const startPolling = () => {
+      if (pollTimer || cancelled) return;
+      pollTimer = setInterval(async () => {
+        try {
+          const res = await fetch("/api/metrics/activity", { headers: { Accept: "application/json" } });
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          const data = (await res.json()) as { items?: ActivityItem[] };
+          ingest(Array.isArray(data.items) ? data.items : []);
+        } catch {
+          /* เก็บฟีดเดิมไว้ รอบถัดไปลองใหม่ */
+        }
+      }, 5000);
+    };
+
+    try {
+      source = new EventSource("/api/metrics/stream");
+      source.addEventListener("activity", (event) => {
+        try {
+          ingest([JSON.parse((event as MessageEvent).data) as ActivityItem]);
+        } catch {
+          /* ignore malformed frame */
+        }
+      });
+      source.onopen = () => {
+        // รอ summary มาก่อนเสมอ — ห้ามออกจาก loading/simulated ก่อนข้อมูลพร้อม
+        sseOpenRef.current = true;
+        if (!cancelled) setDataMode((mode) => (mode === "polling" ? "live" : mode));
+      };
+      source.onerror = () => {
+        source?.close();
+        source = null;
+        sseOpenRef.current = false;
+        startPolling();
+        if (!cancelled) setDataMode((mode) => (mode === "live" ? "polling" : mode));
+      };
+    } catch {
+      startPolling();
+    }
+
+    return () => {
+      cancelled = true;
+      source?.close();
+      if (pollTimer) clearInterval(pollTimer);
+    };
+  }, []);
+
+  /* ---- เปลี่ยนจากโหมดจำลองเป็นข้อมูลจริง → ล้างฟีดปลอมทิ้ง ---- */
+  const prevModeRef = useRef(dataMode);
+  useEffect(() => {
+    if (prevModeRef.current === "simulated" && dataMode !== "simulated") {
+      setFeed([]);
+    }
+    prevModeRef.current = dataMode;
+  }, [dataMode]);
 
   /* ---- emergency kill switch ---- */
   const handleEmergencyToggle = async () => {
@@ -452,9 +606,39 @@ export default function SinglePageDashboard({ config, theme, onToggleTheme, onSw
     { icon: Database, name: "Memory DB", state: dbState, sub: dbSub },
   ];
 
-  const volumeData = range === "hourly" ? series.hourly : series.daily;
+  /* ---- แหล่งข้อมูลที่ใช้แสดงผล: จริงก่อน จำลองสำรอง ---- */
+  const kpi = summary?.kpis ?? kpis;
+  const deltas = summary?.deltas ?? { chatsPct: 12.4, successDelta: 0.8, handoverPct: -2.1, responsePct: -4.6 };
+  const volumeData = range === "hourly" ? summary?.hourly ?? series.hourly : summary?.daily ?? series.daily;
   const totalConversations = volumeData.reduce((sum, p) => sum + p.conversations, 0);
-  const successRateStr = kpis.successRate.toFixed(1);
+  const topicData = summary ? summary.topics : topics;
+  const feedList = dataMode === "simulated" ? feed : realFeed;
+  const chatsSparkValues = summary ? summary.hourly.map((p) => p.conversations) : chatsSpark;
+  const successSparkValues = summary
+    ? summary.daily.map((p) => (p.conversations > 0 ? Math.round((p.answered / p.conversations) * 1000) / 10 : 0))
+    : [92, 93, 92.5, 94, 93.5, 94.2, 94, 95, 94.5, 95.2, 95, 95.8, 95.5, 96, 95.8, 96.2, 96, kpis.successRate];
+
+  /* ---- Loading skeleton (รอข้อมูลจริงครั้งแรก) ---- */
+  if (dataMode === "loading") {
+    return (
+      <div className={`single-page-dash relative font-sans ${t.text}`}>
+        <div className="grid grid-cols-12 gap-3 lg:h-[calc(100dvh_-_14.75rem)] lg:min-h-[640px] lg:grid-rows-[auto_auto_minmax(0,1fr)_auto] lg:gap-4">
+          <SkeletonBlock className="col-span-12 h-14 rounded-2xl" />
+          {[0, 1, 2, 3].map((i) => (
+            <SkeletonBlock key={i} className="col-span-6 h-32 rounded-2xl xl:col-span-3" />
+          ))}
+          <div className="col-span-12 flex min-h-0 xl:col-span-8">
+            <SkeletonBlock className="h-full min-h-[280px] w-full rounded-2xl" />
+          </div>
+          <div className="col-span-12 flex min-h-0 flex-col gap-2.5 xl:col-span-4">
+            <SkeletonBlock className="min-h-[160px] flex-1 rounded-2xl" />
+            <SkeletonBlock className="h-[128px] shrink-0 rounded-2xl" />
+          </div>
+          <SkeletonBlock className="col-span-12 h-36 rounded-2xl" />
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className={`single-page-dash relative font-sans ${t.text}`}>
@@ -481,13 +665,24 @@ export default function SinglePageDashboard({ config, theme, onToggleTheme, onSw
             <div>
               <div className="flex items-center gap-2">
                 <h2 className="text-sm font-extrabold tracking-tight">Live Ops Dashboard</h2>
-                <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] font-bold text-emerald-500">
-                  <span className="relative flex h-1.5 w-1.5">
-                    <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-70" />
-                    <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-emerald-400" />
+                {dataMode === "live" && (
+                  <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] font-bold text-emerald-500">
+                    <span className="relative flex h-1.5 w-1.5">
+                      <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-70" />
+                      <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-emerald-400" />
+                    </span>
+                    REALTIME
                   </span>
-                  LIVE
-                </span>
+                )}
+                {dataMode === "polling" && (
+                  <span className="rounded-full bg-sky-500/10 px-2 py-0.5 text-[10px] font-bold text-sky-400">LIVE • POLLING</span>
+                )}
+                {dataMode === "simulated" && (
+                  <span className="rounded-full bg-slate-500/15 px-2 py-0.5 text-[10px] font-bold text-slate-400">SIMULATED</span>
+                )}
+                {dataMode === "loading" && (
+                  <span className="animate-pulse rounded-full bg-indigo-500/10 px-2 py-0.5 text-[10px] font-bold text-indigo-400">CONNECTING…</span>
+                )}
               </div>
               <p className={`truncate text-[11px] ${t.muted}`}>
                 ภาพรวมทั้งหมดในหน้าเดียว • บอท: <span className="font-semibold">{config.name || "My Bot"}</span>
@@ -527,6 +722,20 @@ export default function SinglePageDashboard({ config, theme, onToggleTheme, onSw
           </div>
         </header>
 
+        {/* ================= error / fallback alert ================= */}
+        {dataMode === "simulated" && connError && (
+          <div className="col-span-12 flex flex-wrap items-center gap-2 rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-[11px] font-semibold text-amber-500">
+            <span>⚠ เชื่อมต่อ Metrics API ไม่สำเร็จ ({connError}) — กำลังแสดงข้อมูลจำลอง</span>
+            <button
+              type="button"
+              onClick={() => void loadSummary()}
+              className="ml-auto rounded-md border border-amber-500/40 px-2 py-0.5 transition hover:bg-amber-500/20"
+            >
+              ลองเชื่อมต่อใหม่
+            </button>
+          </div>
+        )}
+
         {/* ================= KPI cards ================= */}
         <section className="col-span-6 xl:col-span-3">
           <div className={`h-full rounded-2xl border p-3 ${t.card}`}>
@@ -534,7 +743,7 @@ export default function SinglePageDashboard({ config, theme, onToggleTheme, onSw
               <div>
                 <p className={`text-[11px] font-semibold ${t.muted}`}>แชททั้งหมดวันนี้</p>
                 <p className="mt-1 text-2xl font-extrabold tabular-nums tracking-tight">
-                  {kpis.chatsToday.toLocaleString("th-TH")}
+                  {kpi.chatsToday.toLocaleString("th-TH")}
                 </p>
               </div>
               <span className="rounded-lg bg-indigo-500/15 p-2 text-indigo-400">
@@ -542,10 +751,10 @@ export default function SinglePageDashboard({ config, theme, onToggleTheme, onSw
               </span>
             </div>
             <div className="mt-2 flex items-center justify-between gap-2">
-              <DeltaBadge value={12.4} />
+              <DeltaBadge value={deltas.chatsPct} />
               <span className={`text-[10px] ${t.faint}`}>vs เมื่อวาน</span>
             </div>
-            <Sparkline values={chatsSpark} stroke="#818cf8" />
+            <Sparkline values={chatsSparkValues} stroke="#818cf8" />
           </div>
         </section>
 
@@ -554,17 +763,17 @@ export default function SinglePageDashboard({ config, theme, onToggleTheme, onSw
             <div className="flex items-start justify-between">
               <div>
                 <p className={`text-[11px] font-semibold ${t.muted}`}>อัตราตอบสำเร็จ</p>
-                <p className="mt-1 text-2xl font-extrabold tabular-nums tracking-tight text-emerald-500">{successRateStr}%</p>
+                <p className="mt-1 text-2xl font-extrabold tabular-nums tracking-tight text-emerald-500">{kpi.successRate.toFixed(1)}%</p>
               </div>
               <span className="rounded-lg bg-emerald-500/15 p-2 text-emerald-400">
                 <Activity size={16} />
               </span>
             </div>
             <div className="mt-2 flex items-center justify-between gap-2">
-              <DeltaBadge value={0.8} />
+              <DeltaBadge value={deltas.successDelta} />
               <span className={`text-[10px] ${t.faint}`}>AI ตอบสำเร็จโดยไม่ Handover</span>
             </div>
-            <Sparkline values={[92, 93, 92.5, 94, 93.5, 94.2, 94, 95, 94.5, 95.2, 95, 95.8, 95.5, 96, 95.8, 96.2, 96, kpis.successRate]} stroke="#34d399" />
+            <Sparkline values={successSparkValues} stroke="#34d399" />
           </div>
         </section>
 
@@ -574,7 +783,7 @@ export default function SinglePageDashboard({ config, theme, onToggleTheme, onSw
               <div>
                 <p className={`text-[11px] font-semibold ${t.muted}`}>เคสส่งต่อคน (Handover)</p>
                 <p className="mt-1 text-2xl font-extrabold tabular-nums tracking-tight text-amber-500">
-                  {kpis.handover.toLocaleString("th-TH")}
+                  {kpi.handover.toLocaleString("th-TH")}
                 </p>
               </div>
               <span className="rounded-lg bg-amber-500/15 p-2 text-amber-400">
@@ -582,10 +791,10 @@ export default function SinglePageDashboard({ config, theme, onToggleTheme, onSw
               </span>
             </div>
             <div className="mt-2 flex items-center justify-between gap-2">
-              <DeltaBadge value={-2.1} goodWhenDown />
-              <span className={`text-[10px] ${t.faint}`}>รอแอดมินตอบ {Math.max(1, Math.round(kpis.handover / 3))} เคส</span>
+              <DeltaBadge value={deltas.handoverPct} goodWhenDown />
+              <span className={`text-[10px] ${t.faint}`}>รอแอดมินตอบ {Math.max(0, Math.round(kpi.handover / 3))} เคส</span>
             </div>
-            <Sparkline values={[6, 5, 7, 6, 8, 7, 6, 7, 6, 5, 6, 7, 6, 5, 6, 7, 6, kpis.handover]} stroke="#fbbf24" />
+            <Sparkline values={summary ? [] : [6, 5, 7, 6, 8, 7, 6, 7, 6, 5, 6, 7, 6, 5, 6, 7, 6, kpis.handover]} stroke="#fbbf24" />
           </div>
         </section>
 
@@ -595,7 +804,7 @@ export default function SinglePageDashboard({ config, theme, onToggleTheme, onSw
               <div>
                 <p className={`text-[11px] font-semibold ${t.muted}`}>เวลาตอบเฉลี่ย</p>
                 <p className="mt-1 text-2xl font-extrabold tabular-nums tracking-tight text-sky-400">
-                  {kpis.avgResponse.toFixed(1)}
+                  {kpi.avgResponseSec.toFixed(1)}
                   <span className="ml-1 text-xs font-bold">วิ</span>
                 </p>
               </div>
@@ -604,10 +813,10 @@ export default function SinglePageDashboard({ config, theme, onToggleTheme, onSw
               </span>
             </div>
             <div className="mt-2 flex items-center justify-between gap-2">
-              <DeltaBadge value={-4.6} goodWhenDown />
+              <DeltaBadge value={deltas.responsePct} goodWhenDown />
               <span className={`text-[10px] ${t.faint}`}>เป้าหมาย ≤ 3.0 วิ</span>
             </div>
-            <Sparkline values={[3.4, 3.2, 3.5, 3.1, 2.9, 3.0, 2.8, 2.7, 2.9, 2.6, 2.5, 2.7, 2.4, 2.6, 2.5, 2.4, 2.5, kpis.avgResponse]} stroke="#38bdf8" />
+            <Sparkline values={summary ? [] : [3.4, 3.2, 3.5, 3.1, 2.9, 3.0, 2.8, 2.7, 2.9, 2.6, 2.5, 2.7, 2.4, 2.6, 2.5, 2.4, 2.5, kpis.avgResponseSec]} stroke="#38bdf8" />
           </div>
         </section>
 
@@ -721,7 +930,13 @@ export default function SinglePageDashboard({ config, theme, onToggleTheme, onSw
           </div>
 
             <div className="custom-scrollbar mt-2 min-h-[160px] flex-1 space-y-2 overflow-y-auto pr-1">
-            {feed.map((msg, idx) => {
+            {feedList.length === 0 ? (
+              <div className="flex h-full min-h-[140px] flex-col items-center justify-center gap-1 py-6 text-center">
+                <MessagesSquare size={22} className={t.faint} />
+                <p className={`text-[11px] font-semibold ${t.muted}`}>ยังไม่มีข้อความจากลูกค้าในช่วงนี้</p>
+                <p className={`text-[10px] ${t.faint}`}>ข้อความใหม่จาก Telegram จะไหลเข้าที่นี่ทันที</p>
+              </div>
+            ) : feedList.map((msg, idx) => {
               const s = SENTIMENT_STYLE[msg.sentiment];
               const initials = msg.user.slice(0, 2).toUpperCase();
               return (
@@ -745,6 +960,11 @@ export default function SinglePageDashboard({ config, theme, onToggleTheme, onSw
                     <span className={`rounded-md border px-1.5 py-0.5 text-[9.5px] font-semibold ${t.chip}`}>
                       {msg.intent}
                     </span>
+                    {msg.responseMs != null && (
+                      <span className={`rounded-md border px-1.5 py-0.5 text-[9.5px] font-semibold tabular-nums ${t.chip}`}>
+                        ตอบ {((msg.responseMs || 0) / 1000).toFixed(1)}s
+                      </span>
+                    )}
                     {msg.handover && (
                       <span className="inline-flex items-center gap-1 rounded-md border border-amber-500/25 bg-amber-500/10 px-1.5 py-0.5 text-[9.5px] font-bold text-amber-500">
                         <ShieldAlert size={9} /> ส่งต่อแอดมิน
@@ -756,7 +976,13 @@ export default function SinglePageDashboard({ config, theme, onToggleTheme, onSw
             })}
           </div>
             <p className={`mt-1.5 shrink-0 text-center text-[9.5px] ${t.faint}`}>
-              {paused ? "หยุดชั่วคราวอยู่ — กด ▶ เพื่อรับข้อความใหม่" : "อัปเดตแบบ Real-time ทุก ~3 วินาที"}
+              {paused
+                ? "หยุดชั่วคราวอยู่ — กด ▶ เพื่อรับข้อความใหม่"
+                : dataMode === "simulated"
+                  ? "โหมดจำลอง • อัปเดตทุก ~3 วินาที"
+                  : dataMode === "live"
+                    ? `ข้อมูลจริงจาก Telegram • Real-time (SSE)`
+                    : `ข้อมูลจริงจาก Telegram • ตรวจซ้ำทุก 5 วินาที`}
             </p>
           </div>
 
@@ -767,8 +993,13 @@ export default function SinglePageDashboard({ config, theme, onToggleTheme, onSw
               <span className={`text-[9px] ${t.faint}`}>อัปเดตตามข้อความเข้าใหม่</span>
             </div>
             <div className="mt-1 min-h-0 flex-1">
+              {topicData.length === 0 ? (
+                <div className="flex h-full items-center justify-center">
+                  <p className={`text-[10px] ${t.faint}`}>ยังไม่มีข้อความจากลูกค้า — หัวข้อยอดฮิตจะแสดงที่นี่</p>
+                </div>
+              ) : (
               <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={topics} layout="vertical" margin={{ top: 0, right: 30, bottom: 0, left: 0 }}>
+                <BarChart data={topicData} layout="vertical" margin={{ top: 0, right: 30, bottom: 0, left: 0 }}>
                   <XAxis type="number" hide />
                   <YAxis
                     type="category"
@@ -789,13 +1020,14 @@ export default function SinglePageDashboard({ config, theme, onToggleTheme, onSw
                     }}
                   />
                   <Bar dataKey="count" name="จำนวนครั้ง" radius={[0, 5, 5, 0]} barSize={9}>
-                    {topics.map((_, i) => (
+                    {topicData.map((_, i) => (
                       <Cell key={i} fill={TOPIC_COLORS[i % TOPIC_COLORS.length]} />
                     ))}
                     <LabelList dataKey="count" position="right" style={{ fill: t.tick, fontSize: 8.5, fontWeight: 700 }} />
                   </Bar>
                 </BarChart>
               </ResponsiveContainer>
+              )}
             </div>
           </div>
         </section>

@@ -9,6 +9,7 @@ import { GoogleGenAI } from "@google/genai";
 import { ApprovalStore } from "./server/ai/approvals";
 import { JimmyBrain } from "./server/ai/brain";
 import { ConversationMemory } from "./server/ai/memory";
+import { metricsStore } from "./server/ai/metrics";
 import { JimmyReviewer } from "./server/ai/reviewer";
 import { ReviewerMode } from "./server/ai/types";
 import { ToolExecutor } from "./server/ai/executor";
@@ -33,7 +34,7 @@ dotenv.config({ path: ".env.local", override: true });
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
 // เวอร์ชัน build — ใช้ยืนยันผ่าน /health ว่า deploy บน Render เป็นโค้ดล่าสุดหรือยัง
-const APP_VERSION = "ops-dashboard-2";
+const APP_VERSION = "ops-live-data-1";
 const BOT_TOKEN = (process.env.BOT_TOKEN || process.env.TELEGRAM_BOT_TOKEN || "").trim();
 const WEBHOOK_BASE_URL = (process.env.WEBHOOK_BASE_URL || process.env.RENDER_EXTERNAL_URL || "").replace(/\/$/, "");
 // URL ของหน้าเว็บแอดมิน (ใช้ทำ deep-link ปุ่ม "เปิดหลังบ้าน" ในแชต)
@@ -1409,6 +1410,66 @@ app.delete("/api/ai/memory", (req, res) => {
   return res.json({ ok: true, ...conversationMemory.getSafeStatus() });
 });
 
+// ---------- Live Ops Dashboard metrics (ข้อมูลจริงจากข้อความ Telegram) ----------
+app.get("/api/metrics/summary", (_req, res) => {
+  res.json({ ok: true, ...metricsStore.getSummary() });
+});
+
+app.get("/api/metrics/activity", (req, res) => {
+  const since = typeof req.query.since === "string" ? req.query.since : undefined;
+  res.json({ ok: true, items: metricsStore.getActivitySince(since) });
+});
+
+// Server-Sent Events: push ข้อความใหม่ไปหน้า Dashboard แบบ real-time
+const metricsSseClients = new Set<express.Response>();
+metricsStore.onRecord((item) => {
+  const payload = `event: activity\ndata: ${JSON.stringify(item)}\n\n`;
+  for (const client of metricsSseClients) {
+    try {
+      client.write(payload);
+    } catch {
+      metricsSseClients.delete(client);
+    }
+  }
+});
+
+app.get("/api/metrics/stream", (req, res) => {
+  res.writeHead(200, {
+    "Content-Type": "text/event-stream",
+    "Cache-Control": "no-cache, no-transform",
+    Connection: "keep-alive",
+    "X-Accel-Buffering": "no",
+  });
+  res.write("retry: 5000\n\n");
+  metricsSseClients.add(res);
+  const heartbeat = setInterval(() => {
+    try {
+      res.write(": hb\n\n");
+    } catch {
+      /* noop */
+    }
+  }, 25000);
+  req.on("close", () => {
+    clearInterval(heartbeat);
+    metricsSseClients.delete(res);
+  });
+});
+
+// ตัวช่วยทดสอบบนเครื่อง dev (ปิดอัตโนมัติเมื่อมี BOT_TOKEN จริง)
+app.post("/api/metrics/test", (req, res) => {
+  if (getRuntimeBotToken(DEFAULT_INSTANCE_ID)) {
+    return res.status(403).json({ ok: false, error: "ปิดฟีเจอร์ทดสอบบนระบบที่มี BOT_TOKEN จริง" });
+  }
+  const item = metricsStore.recordPrivateMessage({
+    chatId: safeString(req.body?.chatId, "test-chat"),
+    userName: safeString(req.body?.userName, "Test User"),
+    text: safeString(req.body?.text, "สวัสดีครับ"),
+    answered: req.body?.answered !== false,
+    responseMs: Number(req.body?.responseMs) || 1500,
+  });
+  res.json({ ok: true, item });
+});
+
 app.get("/api/ai/recommendations", (_req, res) => {
   const mode = telegramRuntime.getStatus().reviewerMode || getActiveBotConfig().reviewerMode || "normal";
   res.json({ ok: true, ...jimmyReviewer.getSafeSummary(mode) });
@@ -1973,6 +2034,25 @@ async function processTelegramWebhook(instanceId: string, update: any): Promise<
     if ((message && isPrivateChat) || update?.callback_query) {
       telegramUpdateHandler.setBotConfig(entry.config as any);
       const client = new TelegramClient(token);
+      if (message && isPrivateChat && safeString(message.text).trim()) {
+        // บันทึกสถิติจริงให้ Live Ops Dashboard (KPI/กราฟ/ฟีด)
+        const startedAt = Date.now();
+        const metricInput = {
+          chatId: safeString(message.chat?.id),
+          userName: safeString(message.from?.first_name, safeString(message.from?.username, "ลูกค้า")),
+          text: safeString(message.text),
+          answered: true,
+          responseMs: Date.now() - startedAt,
+        };
+        try {
+          await telegramUpdateHandler.handle(client, update as any);
+          metricsStore.recordPrivateMessage(metricInput);
+        } catch (error) {
+          metricsStore.recordPrivateMessage({ ...metricInput, answered: false, responseMs: null });
+          throw error;
+        }
+        return;
+      }
       await telegramUpdateHandler.handle(client, update as any);
       return;
     }
