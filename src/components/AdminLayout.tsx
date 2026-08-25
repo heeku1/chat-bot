@@ -133,6 +133,7 @@ interface AdminLayoutProps {
   onNavigate: (page: ShellPage) => void;
   onToggleTheme: () => void;
   onLogout: () => void;
+  hidePageHeading?: boolean;
 }
 
 export default function AdminLayout({
@@ -145,6 +146,7 @@ export default function AdminLayout({
   onNavigate,
   onToggleTheme,
   onLogout,
+  hidePageHeading = false,
 }: AdminLayoutProps) {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -246,17 +248,19 @@ export default function AdminLayout({
       {mobileOpen && <button className="sidebar-backdrop" onClick={() => setMobileOpen(false)} aria-label="Close navigation" />}
 
       <main className="app-main">
-        <div className="app-content-header">
-          <div className="container-fluid">
-            <div className="shell-page-heading">
-              <div>
-                <p className="shell-eyebrow">Jimmy_bot Control Center</p>
-                <h1>{pageTitles[activePage]}</h1>
+        {!hidePageHeading && (
+          <div className="app-content-header">
+            <div className="container-fluid">
+              <div className="shell-page-heading">
+                <div>
+                  <p className="shell-eyebrow">Jimmy_bot Control Center</p>
+                  <h1>{pageTitles[activePage]}</h1>
+                </div>
+                <span className="shell-breadcrumb">Dashboard <ChevronLeft size={13} /> {pageTitles[activePage]}</span>
               </div>
-              <span className="shell-breadcrumb">Dashboard <ChevronLeft size={13} /> {pageTitles[activePage]}</span>
             </div>
           </div>
-        </div>
+        )}
         <div className="app-content">
           <div className="container-fluid">{children}</div>
         </div>

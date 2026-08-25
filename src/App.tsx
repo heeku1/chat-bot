@@ -11,6 +11,7 @@ import UserManagementConsole from "./components/UserManagementConsole";
 import TemplateDetailModal from "./components/TemplateDetailModal";
 import MarketingDashboard from "./components/MarketingDashboard";
 import AnalyticsDashboard from "./components/AnalyticsDashboard";
+import SinglePageDashboard from "./components/SinglePageDashboard";
 import AdminLayout, { DashboardHome, ShellPage, ShellPlaceholder } from "./components/AdminLayout";
 import Phase2Panel from "./components/Phase2Panel";
 import { botTemplates } from "./presets";
@@ -369,6 +370,7 @@ export default function App() {
 
   const [activeTab, setActiveTab] = useState<'config' | 'simulator' | 'parser' | 'deploy' | 'marketing'>('config');
   const [shellPage, setShellPage] = useState<ShellPage>('dashboard');
+  const [dashboardMode, setDashboardMode] = useState<'live' | 'classic'>('live');
   const [showTemplates, setShowTemplates] = useState<boolean>(true);
   const [presetMessage, setPresetMessage] = useState<string | null>(null);
   const [selectedTemplate, setSelectedTemplate] = useState<any | null>(null);
@@ -661,14 +663,35 @@ export default function App() {
       theme={theme}
       aiReady={aiReady}
       telegramReady={hasBotToken && !hasBackendError}
+      hidePageHeading={shellPage === 'dashboard' && dashboardMode === 'live'}
       onNavigate={handleShellNavigate}
       onToggleTheme={toggleTheme}
       onLogout={handleLogout}
     >
       {shellPage === 'dashboard' ? (
-        <DashboardHome botCount={bots.length} telegramReady={hasBotToken && !hasBackendError} aiReady={aiReady}>
-          <AnalyticsDashboard config={activeBot} />
-        </DashboardHome>
+        dashboardMode === 'live' ? (
+          <SinglePageDashboard
+            config={activeBot}
+            theme={theme}
+            onToggleTheme={toggleTheme}
+            onSwitchToClassic={() => setDashboardMode('classic')}
+          />
+        ) : (
+          <div className="space-y-4">
+            <div>
+              <button
+                type="button"
+                onClick={() => setDashboardMode('live')}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-indigo-500/30 bg-indigo-500/10 px-3 py-1.5 text-[11px] font-bold text-indigo-400 transition hover:bg-indigo-500/20"
+              >
+                ← กลับ Live Dashboard
+              </button>
+            </div>
+            <DashboardHome botCount={bots.length} telegramReady={hasBotToken && !hasBackendError} aiReady={aiReady}>
+              <AnalyticsDashboard config={activeBot} />
+            </DashboardHome>
+          </div>
+        )
       ) : isPhase2PanelPage ? (
         <Phase2Panel
           page={shellPage}

@@ -33,7 +33,7 @@ dotenv.config({ path: ".env.local", override: true });
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
 // เวอร์ชัน build — ใช้ยืนยันผ่าน /health ว่า deploy บน Render เป็นโค้ดล่าสุดหรือยัง
-const APP_VERSION = "tools-live-1";
+const APP_VERSION = "ops-dashboard-1";
 const BOT_TOKEN = (process.env.BOT_TOKEN || process.env.TELEGRAM_BOT_TOKEN || "").trim();
 const WEBHOOK_BASE_URL = (process.env.WEBHOOK_BASE_URL || process.env.RENDER_EXTERNAL_URL || "").replace(/\/$/, "");
 // URL ของหน้าเว็บแอดมิน (ใช้ทำ deep-link ปุ่ม "เปิดหลังบ้าน" ในแชต)

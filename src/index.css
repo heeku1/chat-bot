@@ -94,3 +94,31 @@
 .light .custom-scrollbar::-webkit-scrollbar-thumb:hover {
   background: rgba(0, 0, 0, 0.2);
 }
+
+/* Live Activity feed — new message entrance */
+@keyframes feedIn {
+  from {
+    opacity: 0;
+    transform: translateY(-8px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+.feed-enter {
+  animation: feedIn 0.35s ease-out;
+}
+
+/* Single-Page Dashboard — neutralize Bootstrap/AdminLTE default margins
+   (Bootstrap loads after Tailwind preflight and re-adds p/h margins,
+   which inflates the fixed-height single-screen grid) */
+.single-page-dash p,
+.single-page-dash h2,
+.single-page-dash h3 {
+  margin-bottom: 0 !important;
+  margin-top: 0 !important;
+}
+.single-page-dash svg {
+  display: block;
+}
