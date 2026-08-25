@@ -64,7 +64,7 @@ Live Ops Dashboard คือหน้าควบคุมแบบ **Single Scr
 
 | ไฟสถานะ | ตรวจอะไร | ปกติควรเป็น |
 |---|---|---|
-| **บอท Telegram** | Runtime ของบอทกำลังทำงานหรือไม่ | 🟢 กำลังทำงาน • @ชื่อบอท |
+| ไฟ "บอท Telegram" | Runtime ของบอทกำลังทำงานหรือไม่ (บน Render โชว์ "ออนไลน์ (โหมด Webhook)") | 🟢 ออนไลน์ (โหมด Webhook) |
 | **AI Provider** | คีย์ AI ที่ใช้งาน (Gemini/OpenAI) | 🟢 Gemini • Reviewer: normal |
 | **API / Webhook** | การเชื่อมต่อ Telegram API + webhook | 🟢 telegram-ready • Webhook secret ✓ |
 | **Memory DB** | ฐานความจำสนทนา (จำนวนแชท/โน้ต) | 🟢 Conversation Memory • N แชท |
@@ -74,13 +74,17 @@ Live Ops Dashboard คือหน้าควบคุมแบบ **Single Scr
 
 ### 🚨 Emergency Kill Switch (ปุ่ม ⏻ สีแดง/เขียว มุมขวาล่าง)
 
-ใช้ **หยุดบอททันที** เมื่อเกิดเหตุฉุกเฉิน เช่น บอทตอบผิด ๆ รัว ๆ, มีปัญหาด้านคอนเทนต์, หรือต้องการหยุดระบบชั่วคราว:
+ใช้ **หยุดบอททันทีแบบเด็ดขาด** เมื่อเกิดเหตุฉุกเฉิน เช่น บอทตอบผิด ๆ รัว ๆ, มีปัญหาด้านคอนเทนต์, หรือต้องการหยุดระบบชั่วคราว:
 
 1. กดปุ่ม ⏻ สีแดง → ยืนยันในกล่องป๊อปอัป
-2. ระบบเรียก `POST /api/telegram/runtime/stop` → ป้ายเปลี่ยนเป็น **BOT STOPPED** สีแดง
-3. เปิดกลับ: กดปุ่มเดิม (จะกลายเป็นสีเขียว) → `POST /api/telegram/runtime/start` → **BOT RUNNING**
+2. ระบบเรียก `POST /api/telegram/emergency {action:"stop"}` ซึ่ง:
+   - หยุด polling runtime (ถ้ากำลังรันอยู่)
+   - **`deleteWebhook`** — ตัดข้อความเข้าจาก Telegram ทั้งหมด (ใช้ได้จริงทั้งโหมด Webhook บน Render และโหมด polling)
+3. ป้ายเปลี่ยนเป็น **BOT STOPPED** สีแดง — ลูกค้าทักเข้ามาจะไม่มีการตอบกลับ
+4. เปิดกลับ: กดปุ่มเดิม (สีเขียว) → `POST /api/telegram/emergency {action:"start"}` → ระบบ **`setWebhook`** กลับไปที่ URL ของ Render ให้อัตโนมัติ → **BOT RUNNING**
 
 > ⚠️ ข้อควรระวัง: ขณะ BOT STOPPED ลูกค้าจะ **ไม่ได้รับการตอบกลับใด ๆ** — ควรเปิดกลับโดยเร็ว และแจ้งลูกค้าผ่านช่องทางอื่นหากหยุดนาน
+> 💡 สถานะสวิตช์เก็บฝั่งหน้าจอ (refresh หน้า = กลับเป็น BOT RUNNING) — หาก refresh แล้วสงสัย ให้ดูไฟ "บอท Telegram" ซึ่งดึงสถานะจริงจาก backend ทุก 15 วินาที
 
 ---
 
@@ -129,6 +133,6 @@ Live Ops Dashboard คือหน้าควบคุมแบบ **Single Scr
 - โค้ดหลัก: `src/components/SinglePageDashboard.tsx` (ต่อเข้า shell ที่ `src/App.tsx` ผ่าน state `dashboardMode`)
 - ข้อมูลจำลอง: ทิกทุก 2.8 วิ (`useEffect` interval) — ปิดได้ด้วยปุ่ม pause
 - สถานะจริง: poll `/health` + `/api/telegram/runtime/status` + `/api/ai/memory/status` ทุก 15 วิ (`loadSystem`)
-- Kill switch: `POST /api/telegram/runtime/stop|start` + `window.confirm` + fallback สลับสถานะ local เมื่อ API ล้ม
+- Kill switch: `POST /api/telegram/emergency` (stop = หยุด polling + `deleteWebhook`, start = `setWebhook` กลับ) + `window.confirm` + fallback สลับสถานะ local เมื่อ API ล้ม
 - ธีม: รับ prop `theme` จาก shell (dark/light) — ไม่ใช้ `dark:` variant ของ Tailwind
 - ระวัง: หน้านี้ซ่อน heading ของ shell (`hidePageHeading`) เพื่อประหยัดพื้นที่แนวตั้ง และมี scoped CSS `.single-page-dash` ใน `src/index.css` สำหรับล้าง margin ของ Bootstrap/AdminLTE ที่ทับ Tailwind preflight

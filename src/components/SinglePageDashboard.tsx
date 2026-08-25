@@ -381,10 +381,10 @@ export default function SinglePageDashboard({ config, theme, onToggleTheme, onSw
     if (turningOff && !window.confirm("ยืนยันหยุดการทำงานของบอททันที (Emergency Stop)?")) return;
     setSwitchBusy(true);
     try {
-      const res = await fetch(turningOff ? "/api/telegram/runtime/stop" : "/api/telegram/runtime/start", {
+      const res = await fetch("/api/telegram/emergency", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: "{}",
+        body: JSON.stringify({ action: turningOff ? "stop" : "start" }),
       });
       if (!res.ok) {
         const body = (await res.json().catch(() => ({}))) as { error?: string };
@@ -416,14 +416,17 @@ export default function SinglePageDashboard({ config, theme, onToggleTheme, onSw
     bad: "bg-rose-400 shadow-[0_0_8px_rgba(251,113,133,0.8)]",
   };
 
-  const botState: TileState = emergencyOff ? "bad" : runtime ? (runtime.running ? "ok" : "warn") : "ok";
+  const webhookReady = health?.mode === "telegram-ready" && health?.hasBotToken === true;
+  const botState: TileState = emergencyOff ? "bad" : runtime ? (runtime.running || webhookReady ? "ok" : "warn") : "ok";
   const botSub = emergencyOff
     ? "หยุดฉุกเฉิน — ผู้ใช้จะไม่ได้รับการตอบกลับ"
-    : runtime
-      ? runtime.running
-        ? `กำลังทำงาน${runtime.botUsername ? ` • @${runtime.botUsername}` : ""}`
-        : `Runtime ${runtime.state ?? "stopped"}`
-      : `${config.name} (โหมดจำลอง)`;
+    : runtime?.running
+      ? `กำลังทำงาน${runtime.botUsername ? ` • @${runtime.botUsername}` : ""}`
+      : webhookReady
+        ? "ออนไลน์ (โหมด Webhook)"
+        : runtime
+          ? `Runtime ${runtime.state ?? "stopped"}`
+          : `${config.name} (โหมดจำลอง)`;
 
   const aiState: TileState = providerName === "Offline" ? "warn" : "ok";
   const aiSub = providerName === "Offline" ? "ยังไม่ได้ตั้งค่า AI key" : `${providerName}${runtime?.reviewerMode ? ` • Reviewer: ${runtime.reviewerMode}` : ""}`;

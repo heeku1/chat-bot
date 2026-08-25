@@ -33,7 +33,7 @@ dotenv.config({ path: ".env.local", override: true });
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
 // เวอร์ชัน build — ใช้ยืนยันผ่าน /health ว่า deploy บน Render เป็นโค้ดล่าสุดหรือยัง
-const APP_VERSION = "ops-dashboard-1";
+const APP_VERSION = "ops-dashboard-2";
 const BOT_TOKEN = (process.env.BOT_TOKEN || process.env.TELEGRAM_BOT_TOKEN || "").trim();
 const WEBHOOK_BASE_URL = (process.env.WEBHOOK_BASE_URL || process.env.RENDER_EXTERNAL_URL || "").replace(/\/$/, "");
 // URL ของหน้าเว็บแอดมิน (ใช้ทำ deep-link ปุ่ม "เปิดหลังบ้าน" ในแชต)
@@ -1358,6 +1358,38 @@ app.post("/api/telegram/runtime/start", async (req, res) => {
 app.post("/api/telegram/runtime/stop", async (_req, res) => {
   const status = await telegramRuntime.stop();
   res.json({ ok: true, ...status });
+});
+
+// Emergency kill switch — หยุด/เปิดบอทจริง ทั้งโหมด webhook (Render) และ polling
+// stop  = หยุด polling runtime (ถ้ารันอยู่) + deleteWebhook เพื่อตัดข้อความเข้าทั้งหมด
+// start = setWebhook กลับ (ใช้ WEBHOOK_BASE_URL หรือ RENDER_EXTERNAL_URL ที่ Render inject ให้)
+app.post("/api/telegram/emergency", async (req, res) => {
+  const action = safeString(req.body?.action) === "start" ? "start" : "stop";
+  const instanceId = safeInstanceId(req.body?.instanceId);
+  const token = getRuntimeBotToken(instanceId);
+  if (!token) return res.status(400).json({ ok: false, error: "ยังไม่ได้ตั้ง BOT_TOKEN ใน Environment" });
+  try {
+    if (action === "stop") {
+      if (telegramRuntime.getStatus().running) await telegramRuntime.stop();
+      const result = await telegramApi("deleteWebhook", { drop_pending_updates: false }, token);
+      return res.json({ ok: true, action, result });
+    }
+    const baseUrl = WEBHOOK_BASE_URL || process.env.RENDER_EXTERNAL_URL || "";
+    let webhookResult: unknown = null;
+    let webhookUrl: string | null = null;
+    if (baseUrl) {
+      webhookUrl = `${baseUrl.replace(/\/$/, "")}/telegram/webhook/${instanceId}`;
+      const payload: Record<string, any> = {
+        url: webhookUrl,
+        allowed_updates: ["message", "callback_query", "inline_query"]
+      };
+      if (TELEGRAM_WEBHOOK_SECRET) payload.secret_token = TELEGRAM_WEBHOOK_SECRET;
+      webhookResult = await telegramApi("setWebhook", payload, token);
+    }
+    return res.json({ ok: true, action, webhookUrl, webhookResult });
+  } catch (err: any) {
+    return res.status(500).json({ ok: false, action, error: err.message });
+  }
 });
 
 app.get("/api/ai/memory/status", (_req, res) => {
