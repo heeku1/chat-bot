@@ -195,7 +195,7 @@ export class TelegramUpdateHandler {
     // สร้างภาพจริง: ถ้า intent คือ generate_image ลองเรียก Imagen/gpt-image-1 ก่อน
     // สำเร็จ → ส่งรูปเลย / ล้มเหลว → ตอบข้อความตาม provider (offline guidance หรือแจ้ง error)
     if (result.intent === "generate_image") {
-      const { image, error } = await generateProviderImage(text, this.dependencies.getAiConfig());
+      const { image, error, providerError } = await generateProviderImage(text, this.dependencies.getAiConfig());
       if (image) {
         await client.sendPhotoBuffer(chatId, image.bytes, "jimmy-image.jpg", `🎨 ${text.slice(0, 300)}`, buttonPayload?.replyMarkup);
         return;
@@ -203,7 +203,7 @@ export class TelegramUpdateHandler {
       const reason = error === "no-provider"
         ? "ยังไม่ได้ใส่ GEMINI_API_KEY หรือ OPENAI_API_KEY"
         : "ผู้ให้บริการสร้างภาพตอบไม่สำเร็จ ลองใหม่อีกครั้งครับ";
-      await client.sendMessage(chatId, `🎨 ยังสร้างภาพไม่สำเร็จครับ\n(${reason})`, buttonPayload?.replyMarkup);
+      await client.sendMessage(chatId, `🎨 ยังสร้างภาพไม่สำเร็จครับ\n(${reason}${providerError ? `\n${providerError.slice(0, 200)}` : ""})`, buttonPayload?.replyMarkup);
       return;
     }
 
