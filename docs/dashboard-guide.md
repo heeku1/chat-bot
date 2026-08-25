@@ -1,7 +1,8 @@
 # 📊 คู่มือการใช้งาน Single-Page Live Ops Dashboard
 
-> เวอร์ชันระบบ: `ops-dashboard-1` • อัปเดตล่าสุด: 2026-08-25
+> เวอร์ชันระบบ: `ops-live-data-1` • อัปเดตล่าสุด: 2026-08-25
 > หน้าเว็บ: https://chat-bot-aof7.onrender.com (เมนู **Dashboard** ด้านซ้าย)
+> 🟢 ตอนนี้ KPI / กราฟ / Live Activity ดึง**ข้อมูลจริงจากข้อความ Telegram** แล้ว (โหมดจำลองเหลือไว้เป็น fallback เมื่อ API ล่ม)
 
 ---
 
@@ -35,8 +36,8 @@ Live Ops Dashboard คือหน้าควบคุมแบบ **Single Scr
 | **เคสส่งต่อคน (Handover)** | เคสที่ระบบส่งต่อให้แอดมินแล้ว | เห็นเคสตกค้างที่ต้องตามให้ลูกค้า |
 | **เวลาตอบเฉลี่ย (วิ)** | เวลาเฉลี่ยที่บอทใช้ตอบ | เป้าหมาย ≤ 3.0 วินาที |
 
-- ตัวเลข **อัปเดตสดทุก ~3 วินาที** ตามเคสที่เข้ามาจริง
-- ป้ายสีเขียว/แดงมุมการ์ด = เทียบกับเมื่อวาน (▲ ดี / ▼ แย่ — สำหรับ Handover และเวลาตอบ ค่า "ลดลง" ถือเป็นเรื่องดี)
+- ตัวเลข **ดึงจากข้อมูลจริง** ทุกข้อความที่ลูกค้าทักเข้ามา (สรุปใหม่ทุก 15 วินาที)
+- ป้ายสีเขียว/แดงมุมการ์ด = **เทียบกับเมื่อวานจากฐานข้อมูลจริง** (▲ ดี / ▼ แย่ — สำหรับ Handover และเวลาตอบ ค่า "ลดลง" ถือเป็นเรื่องดี)
 
 ### 📈 Conversation Volume (กราฟหลัก — ฝั่งซ้าย)
 
@@ -48,7 +49,8 @@ Live Ops Dashboard คือหน้าควบคุมแบบ **Single Scr
 
 ### 💬 Live Activity (ฟีดข้อความสด — ฝั่งขวาบน)
 
-- ข้อความล่าสุดที่ผู้ใช้ทักเข้ามา แบบ Real-time (ใหม่สุดอยู่บนสุด พร้อมเอฟเฟกต์ไหลเข้า)
+- ข้อความ**จริง**จากลูกค้าผ่าน Telegram ไหลเข้าแบบ Real-time ผ่าน **Server-Sent Events (SSE)** — ถ้า SSE ไม่ได้จะสลับไป polling ทุก 5 วินาทีอัตโนมัติ
+- ระบบ**จำแนกอารมณ์/หัวข้อจากข้อความจริง**ด้วยตัว classifier ภาษาไทย (คีย์เวิร์ด) ทันทีที่ข้อความเข้า
 - แต่ละข้อความมี 3 ป้ายกำกับ:
   - **● อารมณ์ (Sentiment)** — 🟢 บวก / 🔵 กลาง / 🔴 ลบ
   - **Intent** — เช่น สอบถามสินค้า, ราคา/โปรฯ, ชำระเงิน, พัสดุ, ร้องเรียน
@@ -109,9 +111,10 @@ Live Ops Dashboard คือหน้าควบคุมแบบ **Single Scr
 |---|---|---|
 | [`/health`](https://chat-bot-aof7.onrender.com/health) | สถานะระบบรวม + เวอร์ชัน deploy | `mode: "telegram-ready"`, `version: "ops-dashboard-1"` |
 | [`/api/telegram/runtime/status`](https://chat-bot-aof7.onrender.com/api/telegram/runtime/status) | สถานะ runtime บอท + AI provider | `running: true`, `provider: "Gemini"` |
+| [`/api/metrics/summary`](https://chat-bot-aof7.onrender.com/api/metrics/summary) | สรุป KPI/กราฟ/Top5 ที่ Dashboard ใช้ | `kpis.chatsToday`, `hourly[24]`, `daily[14]` |
 | [`/api/ai/memory/status`](https://chat-bot-aof7.onrender.com/api/ai/memory/status) | ฐานความจำสนทนา | `enabled: true`, `chatCount > 0` |
 
-> หมายเหตุ: ตัวเลขบน KPI / กราฟ / Live Activity เป็นข้อมูลจำลอง (Simulated) เพื่อการมอนิเตอร์รูปแบบเรียลไทม์ — ส่วน **System Control & Status** เป็นสถานะจริงจาก backend เสมอ
+> ℹ️ **ที่มาของข้อมูล:** ทุกข้อความ private chat ที่เข้า webhook จะถูกบันทึกลง `runtime-data/metrics.json` (บนดิสก์ของ instance) พร้อมเวลาที่บอทใช้ตอบ — ตัวเลขจึงเป็นสถิติการใช้งานจริง หาก instance restart ข้อมูลเก่าบน Render free plan จะรีเซ็ต (ดิสก์ ephemeral)
 
 ---
 
@@ -119,6 +122,9 @@ Live Ops Dashboard คือหน้าควบคุมแบบ **Single Scr
 
 | อาการ | สาเหตุที่พบบ่อย | วิธีแก้ |
 |---|---|---|
+| ป้าย "SIMULATED" + แถบเตือนสีเหลือง | Metrics API ล่ม / ระบบ restart | กด "ลองเชื่อมต่อใหม่" หรือรอ 1–2 นาที |
+| Badge เป็น "LIVE • POLLING" ไม่ขึ้น REALTIME | SSE ถูก proxy ปิด — ใช้ polling 5 วินาทีแทน | เป็นพฤติกรรมปกติ ข้อมูลยังอัปเดตจริง |
+| ฟีดว่าง "ยังไม่มีข้อความจากลูกค้า" | ยังไม่มีใครทักบอทในช่วงนี้ | รอข้อความเข้า หรือทดสอบทักบอทใน Telegram |
 | ป้าย "Backend offline (simulated)" | API หลังบ้านล่ม / ระบบกำลัง restart | รอ 1–2 นาทีแล้วกด 🔄 รีเฟรช |
 | ไฟ "บอท Telegram" เหลือง | Runtime หยุดอยู่ | กดสวิตช์ฉุกเฉินเพื่อเปิดใหม่ หรือเช็ก `/api/telegram/runtime/status` |
 | ไฟ "AI Provider" เหลือง (Offline) | ยังไม่ได้ตั้ง `GEMINI_API_KEY`/`OPENAI_API_KEY` | เพิ่ม env var บน Render แล้ว redeploy |
@@ -131,8 +137,9 @@ Live Ops Dashboard คือหน้าควบคุมแบบ **Single Scr
 ## 7. สำหรับนักพัฒนา (Dev Notes)
 
 - โค้ดหลัก: `src/components/SinglePageDashboard.tsx` (ต่อเข้า shell ที่ `src/App.tsx` ผ่าน state `dashboardMode`)
-- ข้อมูลจำลอง: ทิกทุก 2.8 วิ (`useEffect` interval) — ปิดได้ด้วยปุ่ม pause
-- สถานะจริง: poll `/health` + `/api/telegram/runtime/status` + `/api/ai/memory/status` ทุก 15 วิ (`loadSystem`)
+- ข้อมูลจริง: `server/ai/metrics.ts` (MetricsStore) — บันทึกทุกข้อความ private chat ที่ `processTelegramWebhook`, persist เป็น `runtime-data/metrics.json`
+- Endpoints: `GET /api/metrics/summary` • `GET /api/metrics/activity?since=` • `GET /api/metrics/stream` (SSE) • `POST /api/metrics/test` (dev-only — 403 อัตโนมัติเมื่อมี BOT_TOKEN)
+- Frontend: summary poll 15 วิ + EventSource สำหรับ feed (fallback polling 5 วิ) + skeleton ตอนโหลดครั้งแรก + error banner เมื่อ fallback เป็นโหมดจำลอง
 - Kill switch: `POST /api/telegram/emergency` (stop = หยุด polling + `deleteWebhook`, start = `setWebhook` กลับ) + `window.confirm` + fallback สลับสถานะ local เมื่อ API ล้ม
 - ธีม: รับ prop `theme` จาก shell (dark/light) — ไม่ใช้ `dark:` variant ของ Tailwind
 - ระวัง: หน้านี้ซ่อน heading ของ shell (`hidePageHeading`) เพื่อประหยัดพื้นที่แนวตั้ง และมี scoped CSS `.single-page-dash` ใน `src/index.css` สำหรับล้าง margin ของ Bootstrap/AdminLTE ที่ทับ Tailwind preflight
